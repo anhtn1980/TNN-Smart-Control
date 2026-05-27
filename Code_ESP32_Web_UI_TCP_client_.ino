@@ -150,8 +150,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("<pre id='status' style='font-size:10px;margin-top:20px;opacity:0.5;'>Loading...</pre>");
 
     client.println("<script>");
-    client.println("let lastCmdTime=0;");
-    client.println("function cmd(c,btn){let now=Date.now();if(now-lastCmdTime<400)return;lastCmdTime=now;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),150);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>{setTimeout(poll,300);});}");
+    client.println("let lastCmdTime=0;let cmdInFlight=false;const CMD_COOLDOWN_MS=120;");
+    client.println("function cmd(c,btn){let now=Date.now();if(cmdInFlight)return;if(now-lastCmdTime<CMD_COOLDOWN_MS)return;lastCmdTime=now;cmdInFlight=true;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),120);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>setTimeout(poll,120)).catch(()=>{}).finally(()=>{cmdInFlight=false;});}");
     client.println("for(let i=1;i<=16;i++){let b=document.getElementById('L'+i);if(b)b.onclick=()=>cmd('set /relay/'+i+'/toggle',b);}");
     client.println("for(let i=1;i<=4;i++){let b=document.getElementById('AC'+i);if(b)b.onclick=()=>cmd('set /ac/'+i+'/pulse',b);}");
     client.println("document.getElementById('ALL').onclick=(e)=>cmd('set /system/all off',e.target);");
