@@ -257,7 +257,7 @@ void handleTCP() {
 
     char buf[160];
     buildStatus(buf);
-    cl.print(buf);
+    cl.println(buf);
   }
 }
 
