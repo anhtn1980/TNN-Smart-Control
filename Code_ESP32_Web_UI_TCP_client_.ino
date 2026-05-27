@@ -24,6 +24,25 @@ EthernetServer server(80);
 EthernetClient megaClient;
 String globalStatus = "";
 
+
+String normalizeStatusLine(const String &raw) {
+  int start = raw.lastIndexOf("L1=");
+  if (start < 0) return "";
+
+  String part = raw.substring(start);
+  part.replace("\r", "");
+  part.replace("\n", "");
+
+  int end = part.lastIndexOf("L16=");
+  if (end < 0) return part;
+
+  int commaAfter = part.indexOf(',', end);
+  if (commaAfter > 0) {
+    return part.substring(0, commaAfter);
+  }
+  return part;
+}
+
 /* ===== RESET W5500 ===== */
 void resetW5500() {
   pinMode(W5500_RST, OUTPUT);
@@ -220,7 +239,10 @@ void loop() {
   if (megaClient.connected() && megaClient.available()) {
     String line = megaClient.readStringUntil('\n');
     line.trim();
-    if (line.indexOf('=') > 0) globalStatus = line;
+    String normalized = normalizeStatusLine(line);
+    if (normalized.length() > 0) {
+      globalStatus = normalized;
+    }
   }
 
 static unsigned long t = 0;
