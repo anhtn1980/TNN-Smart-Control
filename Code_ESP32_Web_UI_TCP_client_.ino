@@ -24,6 +24,25 @@ EthernetServer server(80);
 EthernetClient megaClient;
 String globalStatus = "";
 
+
+String normalizeStatusLine(const String &raw) {
+  int start = raw.lastIndexOf("L1=");
+  if (start < 0) return "";
+
+  String part = raw.substring(start);
+  part.replace("\r", "");
+  part.replace("\n", "");
+
+  int end = part.lastIndexOf("L16=");
+  if (end < 0) return part;
+
+  int commaAfter = part.indexOf(',', end);
+  if (commaAfter > 0) {
+    return part.substring(0, commaAfter);
+  }
+  return part;
+}
+
 /* ===== RESET W5500 ===== */
 void resetW5500() {
   pinMode(W5500_RST, OUTPUT);
@@ -81,14 +100,29 @@ void handleWebRequest(EthernetClient client) {
     return;
   }
 
-  /* ===== WEB UI ROOT ===== */
+  /* ===== WEB UI MENU ===== */
   if (request.startsWith("GET / ")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
+    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}h2{margin-top:10px}.menu{max-width:500px;margin:30px auto;display:grid;gap:14px;}a{display:block;padding:18px;border-radius:12px;background:#333;color:#fff;text-decoration:none;font-size:18px;border:1px solid #555;}a:hover{background:#444;}</style></head><body>");
+    client.println("<h2>TNN SI - SMART CONTROL</h2>");
+    client.println("<p>Chọn nhóm thiết bị cần điều khiển:</p>");
+    client.println("<div class='menu'>");
+    client.println("<a href='/mega'>🔌 Điều khiển thiết bị Mega</a>");
+    client.println("<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>");
+    client.println("</div></body></html>");
+    client.stop();
+    return;
+  }
 
-    // 🔥 CSS thêm hiệu ứng
+  /* ===== WEB UI MEGA (OLD PAGE) ===== */
+  if (request.startsWith("GET /mega ")) {
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
+    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
     client.println("<style>");
     client.println("body{font-family:Arial;background:#111;color:#fff;text-align:center;}");
+    client.println(".top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}");
+    client.println(".back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}");
     client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;}");
     client.println("button{height:60px;font-size:12px;border-radius:10px;border:none;background:#444;color:#fff;transition:0.1s;cursor:pointer;}");
     client.println("button:active{transform:scale(0.95);background:#666;}");
@@ -97,8 +131,8 @@ void handleWebRequest(EthernetClient client) {
     client.println(".ac{background:#225588;}");
     client.println("</style></head><body>");
 
-    client.println("<h2>TNN SI - SMART CONTROL</h2>");
-    
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>TNN SI - MEGA CONTROL</h2></div>");
+
     client.println("<h4>RELAY CONTROL (1-16)</h4><div class='grid'>");
     const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
     for(int i=1; i<=16; i++) {
@@ -115,19 +149,35 @@ void handleWebRequest(EthernetClient client) {
 
     client.println("<pre id='status' style='font-size:10px;margin-top:20px;opacity:0.5;'>Loading...</pre>");
 
-    // 🔥 JS thêm hiệu ứng nhấn
     client.println("<script>");
-    client.println("let lastCmdTime=0;");
-    client.println("function cmd(c,btn){let now=Date.now();if(now-lastCmdTime<400)return;lastCmdTime=now;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),150);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>{setTimeout(poll,300);});}");
-
-    client.println("for(let i=1;i<=16;i++){let b=document.getElementById('L'+i);if(b)b.onclick=()=>cmd('set /relay/'+i+'/toggle',b);}");
-    client.println("for(let i=1;i<=4;i++){let b=document.getElementById('AC'+i);if(b)b.onclick=()=>cmd('set /ac/'+i+'/pulse',b);}");    
+    client.println("let lastCmdTime=0;let cmdInFlight=false;let queuedCmd=null;const CMD_COOLDOWN_MS=90;");
+    client.println("function sendCmd(c,btn){let now=Date.now();if(now-lastCmdTime<CMD_COOLDOWN_MS){queuedCmd={c,btn};setTimeout(()=>{if(!cmdInFlight&&queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}},CMD_COOLDOWN_MS);return;}lastCmdTime=now;cmdInFlight=true;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),90);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>setTimeout(poll,80)).catch(()=>setTimeout(poll,150)).finally(()=>{cmdInFlight=false;if(queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}});}");
+    client.println("function cmd(c,btn){if(cmdInFlight){queuedCmd={c,btn};return;}sendCmd(c,btn);}");
+    client.println("for(let i=1;i<=16;i++){let b=document.getElementById('L'+i);if(b)b.onclick=()=>{let isOn=b.classList.contains('on');let next=!isOn;b.classList.toggle('on',next);cmd('set /relay/'+i+'/state '+(next?'true':'false'),b);};}");
+    client.println("for(let i=1;i<=4;i++){let b=document.getElementById('AC'+i);if(b)b.onclick=()=>cmd('set /ac/'+i+'/pulse',b);}");
     client.println("document.getElementById('ALL').onclick=(e)=>cmd('set /system/all off',e.target);");
-
     client.println("function poll(){fetch('/status').then(r=>r.text()).then(t=>{document.getElementById('status').innerText=t;t.split(',').forEach(p=>{let kv=p.split('=');if(kv.length!=2)return;let k=kv[0].trim();let v=kv[1].trim();let b=document.getElementById(k);if(!b)return;if(v=='1')b.classList.add('on');else b.classList.remove('on');});});}");
     client.println("setInterval(poll,2000);poll();");
     client.println("</script></body></html>");
 
+    client.stop();
+    return;
+  }
+
+  /* ===== WEB UI AMX (NEW PAGE PLACEHOLDER) ===== */
+  if (request.startsWith("GET /amx ")) {
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
+    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
+    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:16px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.grid{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:10px;max-width:500px;margin:20px auto;}button{height:70px;font-size:14px;border-radius:10px;border:none;background:#225588;color:#fff;}small{opacity:.75;display:block;margin-top:8px;}</style></head><body>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>AMX CONTROL</h2></div>");
+    client.println("<p>Trang giao diện AMX (khung cơ bản 4 nút, sẽ gắn lệnh sau).</p>");
+    client.println("<div class='grid'>");
+    client.println("<button id='AMX1'>AMX 1</button>");
+    client.println("<button id='AMX2'>AMX 2</button>");
+    client.println("<button id='AMX3'>AMX 3</button>");
+    client.println("<button id='AMX4'>AMX 4</button>");
+    client.println("</div><small>Hiện tại các nút đang ở chế độ placeholder.</small>");
+    client.println("</body></html>");
     client.stop();
     return;
   }
@@ -190,7 +240,10 @@ void loop() {
   if (megaClient.connected() && megaClient.available()) {
     String line = megaClient.readStringUntil('\n');
     line.trim();
-    if (line.indexOf('=') > 0) globalStatus = line;
+    String normalized = normalizeStatusLine(line);
+    if (normalized.length() > 0) {
+      globalStatus = normalized;
+    }
   }
 
 static unsigned long t = 0;
