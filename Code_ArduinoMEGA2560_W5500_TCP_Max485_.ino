@@ -5,6 +5,9 @@
 #include <SPI.h>
 #include <Ethernet2.h>
 
+/* ===== FIRMWARE VERSION ===== */
+#define FW_VERSION "1.1.0"
+
 /* ================= CONFIG ================= */
 #define TCP_PORT    9000
 #define MAX_CLIENTS 4
@@ -17,6 +20,11 @@
 
 #define SCENE_PIN 30
 #define DEBOUNCE_MS 50
+
+// v1.1.0: timeout chờ phản hồi RS485 (trần an toàn, thường thoát sớm hơn nhiều)
+#define RS485_READ_TIMEOUT_MS 60
+// v1.1.0: giãn nhịp đọc I/O mirror để loop() rảnh xử lý lệnh TCP nhanh hơn
+#define IO_POLL_INTERVAL_MS 120
 
 //#define DEFAULT_LIGHT_MASK ((1 << 1) | (1 << 6))
 #define DEFAULT_LIGHT_MASK (1 << 11)
@@ -80,22 +88,30 @@ void rs485Send(const byte *cmd) {
   digitalWrite(DE_PIN, LOW);
 }
 
+// v1.1.0: chờ đủ byte phản hồi nhưng thoát ngay khi đã có đủ, thay vì
+// luôn luôn delay() cố định 60ms dù phản hồi đến sớm hơn nhiều.
+bool waitForBytes(int count, unsigned long timeoutMs) {
+  unsigned long t0 = millis();
+  while ((int)RS485.available() < count) {
+    if (millis() - t0 >= timeoutMs) return false;
+  }
+  return true;
+}
+
 bool readIO(uint16_t &inBits, uint16_t &outBits) {
   byte resp[8];
 
   while (RS485.available()) RS485.read();
 
   rs485Send(readInputsCmd);
-  delay(60);
-  if (RS485.available() < 7) return false;
+  if (!waitForBytes(7, RS485_READ_TIMEOUT_MS)) return false;
   RS485.readBytes(resp, 7);
   inBits = (resp[3] << 8) | resp[4];
 
   while (RS485.available()) RS485.read();
 
   rs485Send(readOutputsCmd);
-  delay(60);
-  if (RS485.available() < 7) return false;
+  if (!waitForBytes(7, RS485_READ_TIMEOUT_MS)) return false;
   RS485.readBytes(resp, 7);
   outBits = (resp[3] << 8) | resp[4];
 
@@ -274,6 +290,9 @@ void setup() {
   Serial.begin(115200);
   delay(1200);
 
+  Serial.print("MEGA Firmware v");
+  Serial.println(FW_VERSION);
+
   Ethernet.begin(mac, ip, gateway, gateway, subnet);
   tcpServer.begin();
 
@@ -288,27 +307,36 @@ void setup() {
 /* ================= LOOP ================= */
 void loop() {
 
-  handleSceneSwitch();   // 🔥 SCENE OK
+  handleSceneSwitch();   // SCENE OK
 
   acceptClients();
   handleTCP();
 
+  static unsigned long lastIOPoll = 0;
   uint16_t inBits, outBits;
 
+  // v1.1.0: chỉ poll mirror mỗi IO_POLL_INTERVAL_MS thay vì mọi vòng loop(),
+  // để dành chu kỳ CPU cho acceptClients()/handleTCP() xử lý lệnh relay
+  // từ mạng nhanh hơn, không bị kẹt phía sau vòng polling mirror.
   if (!needSync && millis() > mirrorBlockUntil &&
-      readIO(inBits, outBits)) {
+      millis() - lastIOPoll >= IO_POLL_INTERVAL_MS) {
 
-    if (millis() > mirrorBlockUntil) {
-      inSnapshot = inBits;
-      outSnapshot = outBits;
-    }
+    lastIOPoll = millis();
 
-    if (millis() > mirrorBlockUntil) {
-      if (inBits == prevInBits && inBits != lastInputs) {
-        mirrorInputs(inBits);
-        lastInputs = inBits;
+    if (readIO(inBits, outBits)) {
+
+      if (millis() > mirrorBlockUntil) {
+        inSnapshot = inBits;
+        outSnapshot = outBits;
       }
-      prevInBits = inBits;
+
+      if (millis() > mirrorBlockUntil) {
+        if (inBits == prevInBits && inBits != lastInputs) {
+          mirrorInputs(inBits);
+          lastInputs = inBits;
+        }
+        prevInBits = inBits;
+      }
     }
   }
 
