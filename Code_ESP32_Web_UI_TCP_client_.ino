@@ -1,6 +1,9 @@
 #include <SPI.h>
 #include <Ethernet.h>
 
+/* ===== FIRMWARE VERSION ===== */
+#define FW_VERSION "1.1.0"
+
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
 #define W5500_RST 4
@@ -18,6 +21,10 @@ IPAddress subnet(255, 255, 255, 0);
 /* ===== MEGA CONFIG ===== */
 const char* megaIP = "192.168.1.178";
 const int megaPort = 9000;
+
+/* ===== HTTP REQUEST READ CONFIG ===== */
+// v1.1.0: thời gian tối đa chờ đủ header HTTP trước khi bỏ cuộc
+#define REQUEST_TIMEOUT_MS 500
 
 /* ===== SERVER ===== */
 EthernetServer server(80);
@@ -64,10 +71,29 @@ void sendToMega(String cmd) {
 /* ===== HTTP HANDLER ===== */
 void handleWebRequest(EthernetClient client) {
   String request = "";
-  while (client.available()) {
-    char c = client.read();
-    request += c;
-    if (request.indexOf("\r\n\r\n") >= 0) break;
+  bool headerComplete = false;
+  unsigned long startWait = millis();
+
+  // v1.1.0: chờ đủ header (tối đa REQUEST_TIMEOUT_MS) thay vì bỏ cuộc ngay
+  // khi client.available() tạm thời về 0 — tránh request bị đọc cụt do
+  // TCP segmentation (request đến làm nhiều gói), từng khiến lệnh bị
+  // âm thầm bỏ qua mà không có phản hồi lỗi rõ ràng.
+  while (!headerComplete && (millis() - startWait < REQUEST_TIMEOUT_MS)) {
+    while (client.available()) {
+      char c = client.read();
+      request += c;
+      if (request.indexOf("\r\n\r\n") >= 0) {
+        headerComplete = true;
+        break;
+      }
+    }
+    if (headerComplete) break;
+    if (!client.connected()) break;
+  }
+
+  if (!headerComplete) {
+    client.stop();
+    return;
   }
 
   // ===== API SET =====
@@ -206,6 +232,8 @@ void handleWebRequest(EthernetClient client) {
 /* ===== SETUP ===== */
 void setup() {
   Serial.begin(115200);
+  Serial.print("ESP32 Firmware v");
+  Serial.println(FW_VERSION);
 
   resetW5500();
 
@@ -250,7 +278,7 @@ static unsigned long t = 0;
 
 if (!megaClient.connected()) {
 
-  if (millis() - t > 3000) {   // 🔥 giảm tần suất reconnect
+  if (millis() - t > 3000) {   // giảm tần suất reconnect
     t = millis();
 
     Serial.println("Attempting to reconnect to Mega...");
@@ -259,7 +287,7 @@ if (!megaClient.connected()) {
 
       Serial.println("RECONNECTED OK");
 
-      delay(200); // 🔥 tăng delay cho chắc
+      delay(200); // tăng delay cho chắc
 
       megaClient.print("HELLO ESP\r\n");
 
