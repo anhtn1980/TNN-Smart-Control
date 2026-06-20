@@ -41,15 +41,15 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
-### [1.5.0] - 2026-06-20
-Triển khai HTTP keep-alive — giải pháp triệt để hơn cho vấn đề ESP32 liên tục rớt kết nối tới MEGA (`Attempting to reconnect... RECONNECTED OK` lặp vô hạn) khi bấm nút dồn dập. Nguyên nhân gốc: mỗi request HTTP trước đây mở 1 socket TCP mới và đóng ngay sau khi trả lời (`Connection: close`); module W5500 chỉ có số lượng socket phần cứng giới hạn (mặc định 4 theo thư viện Ethernet) dùng chung cho: socket lắng nghe cổng 80, socket phục vụ client HTTP, và socket thường trực `megaClient` tới MEGA. Khi bấm dồn dập (đặc biệt sau khi v1.4.0 sửa xong lỗi JS khiến mỗi lần bấm giờ tạo đúng 1 request thật, tăng tần suất request thực tế), việc mở/đóng socket liên tục có thể khiến `megaClient` bị ảnh hưởng/rớt theo.
-- Thêm `sendResponse()`: gửi response kèm `Content-Length` chính xác (tính theo byte, bắt buộc để trình duyệt biết ranh giới response trên kết nối dùng lại nhiều lần) và `Connection: keep-alive`, không tự đóng kết nối.
-- Thêm `webClients[MAX_WEB_CLIENTS]` (2 slot) + `acceptWebClients()`: giữ tối đa 2 kết nối HTTP mở lâu dài, tái sử dụng cho nhiều request liên tiếp thay vì mở mới mỗi lần — tổng cộng tối đa 4 socket cùng lúc (1 lắng nghe + 2 web + 1 megaClient), khớp giới hạn phần cứng mặc định.
-- `acceptWebClients()` kiểm tra trùng lặp trước khi gán slot mới: `server.available()` của thư viện Ethernet có thể trả về lại một kết nối ĐÃ được theo dõi (không chỉ kết nối mới) nếu nó đang có dữ liệu chờ đọc — nếu không kiểm tra sẽ gây xung đột do 2 slot cùng trỏ vào 1 socket.
-- Thêm `WEB_IDLE_TIMEOUT_MS` (8s): tự đóng kết nối không hoạt động quá lâu (dọn tab trình duyệt bị bỏ quên), lớn hơn chu kỳ poll định kỳ (2s) để không đóng nhầm kết nối đang dùng bình thường.
-- `handleWebRequest()` nhận `EthernetClient&` theo tham chiếu, không còn gọi `client.stop()` ở các nhánh xử lý thành công (chỉ còn đúng 1 chỗ: khi đọc header thất bại/timeout, lúc đó trạng thái stream không đáng tin nên đóng cho an toàn).
-- Route không khớp (vd. `/favicon.ico`) giờ PHẢI trả lời (404, body rỗng) thay vì im lặng như trước — bắt buộc với keep-alive, vì không phản hồi sẽ khiến trình duyệt treo chờ trên kết nối đang giữ, kẹt luôn các request xếp hàng sau.
-- Nội dung HTML/JS các trang không đổi (giữ nguyên từ v1.4.0), chỉ đổi cách gửi đi (build thành `String` để tính được `Content-Length` trước khi gửi, thay vì nhiều lệnh `client.println()` rời rạc).
+### [1.6.0] - 2026-06-20
+Rollback HTTP keep-alive (v1.5.0) — phát hiện lỗi response trả về status 200 OK nhưng body RỖNG (xác nhận qua DevTools tab Network), dù log Serial trên ESP32 khẳng định đã gửi đủ dữ liệu (`sendResponse: ... da gui xong`). Nghi vấn lỗi nằm ở tầng buffer/timing khi tái sử dụng socket trên thư viện Ethernet/W5500 — không lộ ra qua việc đọc lại logic code (logic đọc qua hợp lý), khó chẩn đoán/sửa tiếp một cách đáng tin cậy từ xa qua nhiều vòng debug. Quyết định: rủi ro/effort của việc tiếp tục debug keep-alive không tương xứng so với mức độ nghiêm trọng của vấn đề gốc (chỉ thỉnh thoảng rớt `megaClient` khi bấm RẤT nhanh) — trong khi giao diện hiện tại hoàn toàn không dùng được.
+- Quay lại đúng cơ chế HTTP của v1.4.0: mỗi request mở 1 socket mới, `Connection: close`, `client.stop()` sau mỗi response — đã xác nhận chạy ổn định trong thực tế.
+- Xóa `sendResponse()`, `acceptWebClients()`, `webClients[]`, `MAX_WEB_CLIENTS`, `WEB_IDLE_TIMEOUT_MS` (toàn bộ hạ tầng keep-alive).
+- Giữ nguyên phần sửa lỗi JS `pendingTarget` (v1.4.0, bấm nhanh không bị triệt tiêu) — không liên quan tới keep-alive, vẫn đúng.
+- Giải pháp thay thế cho vấn đề socket quá tải khi bấm dồn dập: tăng `CMD_COOLDOWN_MS` từ 90ms lên 150ms — giảm tần suất mở socket HTTP mới phía JS, giảm áp lực lên W5500 mà không cần giữ kết nối mở. Đây là phương án an toàn, rủi ro thấp đã đề xuất từ đầu trước khi thử keep-alive.
+
+### [1.5.0] - 2026-06-20 (ROLLBACK — xem v1.6.0)
+~~Triển khai HTTP keep-alive: giữ tối đa 2 kết nối HTTP mở lâu dài, gửi Content-Length chính xác, không đóng kết nối sau mỗi response.~~ Đã rollback ở v1.6.0 do lỗi response body rỗng không tìm ra nguyên nhân gốc sau nhiều vòng debug. Giữ lại đoạn này để truy vết lịch sử thay đổi.
 
 ### [1.4.0] - 2026-06-20
 Sửa lỗi: bấm nhanh liên tiếp 2 lần vào 1 nút relay không có tác dụng ("phải giữ tay/chuột đè 1 chút mới ăn"), xảy ra cả với chuột và cảm ứng. Nguyên nhân: `onclick` của mỗi nút đọc trực tiếp `classList.contains('on')` để tính trạng thái mới mỗi lần bấm — nếu bấm 2 lần rất nhanh, lần bấm thứ 2 đọc đúng màu đã bị lần 1 vừa đổi và đảo ngược lại lần nữa, khiến 2 lần bấm tự triệt tiêu nhau cả về màu hiển thị lẫn lệnh cuối cùng được gửi đi. Một lần bấm/giữ đủ lâu chỉ tạo đúng 1 sự kiện click nên không gặp lỗi này.
