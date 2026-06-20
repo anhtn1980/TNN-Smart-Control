@@ -41,6 +41,16 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [1.5.0] - 2026-06-20
+Triển khai HTTP keep-alive — giải pháp triệt để hơn cho vấn đề ESP32 liên tục rớt kết nối tới MEGA (`Attempting to reconnect... RECONNECTED OK` lặp vô hạn) khi bấm nút dồn dập. Nguyên nhân gốc: mỗi request HTTP trước đây mở 1 socket TCP mới và đóng ngay sau khi trả lời (`Connection: close`); module W5500 chỉ có số lượng socket phần cứng giới hạn (mặc định 4 theo thư viện Ethernet) dùng chung cho: socket lắng nghe cổng 80, socket phục vụ client HTTP, và socket thường trực `megaClient` tới MEGA. Khi bấm dồn dập (đặc biệt sau khi v1.4.0 sửa xong lỗi JS khiến mỗi lần bấm giờ tạo đúng 1 request thật, tăng tần suất request thực tế), việc mở/đóng socket liên tục có thể khiến `megaClient` bị ảnh hưởng/rớt theo.
+- Thêm `sendResponse()`: gửi response kèm `Content-Length` chính xác (tính theo byte, bắt buộc để trình duyệt biết ranh giới response trên kết nối dùng lại nhiều lần) và `Connection: keep-alive`, không tự đóng kết nối.
+- Thêm `webClients[MAX_WEB_CLIENTS]` (2 slot) + `acceptWebClients()`: giữ tối đa 2 kết nối HTTP mở lâu dài, tái sử dụng cho nhiều request liên tiếp thay vì mở mới mỗi lần — tổng cộng tối đa 4 socket cùng lúc (1 lắng nghe + 2 web + 1 megaClient), khớp giới hạn phần cứng mặc định.
+- `acceptWebClients()` kiểm tra trùng lặp trước khi gán slot mới: `server.available()` của thư viện Ethernet có thể trả về lại một kết nối ĐÃ được theo dõi (không chỉ kết nối mới) nếu nó đang có dữ liệu chờ đọc — nếu không kiểm tra sẽ gây xung đột do 2 slot cùng trỏ vào 1 socket.
+- Thêm `WEB_IDLE_TIMEOUT_MS` (8s): tự đóng kết nối không hoạt động quá lâu (dọn tab trình duyệt bị bỏ quên), lớn hơn chu kỳ poll định kỳ (2s) để không đóng nhầm kết nối đang dùng bình thường.
+- `handleWebRequest()` nhận `EthernetClient&` theo tham chiếu, không còn gọi `client.stop()` ở các nhánh xử lý thành công (chỉ còn đúng 1 chỗ: khi đọc header thất bại/timeout, lúc đó trạng thái stream không đáng tin nên đóng cho an toàn).
+- Route không khớp (vd. `/favicon.ico`) giờ PHẢI trả lời (404, body rỗng) thay vì im lặng như trước — bắt buộc với keep-alive, vì không phản hồi sẽ khiến trình duyệt treo chờ trên kết nối đang giữ, kẹt luôn các request xếp hàng sau.
+- Nội dung HTML/JS các trang không đổi (giữ nguyên từ v1.4.0), chỉ đổi cách gửi đi (build thành `String` để tính được `Content-Length` trước khi gửi, thay vì nhiều lệnh `client.println()` rời rạc).
+
 ### [1.4.0] - 2026-06-20
 Sửa lỗi: bấm nhanh liên tiếp 2 lần vào 1 nút relay không có tác dụng ("phải giữ tay/chuột đè 1 chút mới ăn"), xảy ra cả với chuột và cảm ứng. Nguyên nhân: `onclick` của mỗi nút đọc trực tiếp `classList.contains('on')` để tính trạng thái mới mỗi lần bấm — nếu bấm 2 lần rất nhanh, lần bấm thứ 2 đọc đúng màu đã bị lần 1 vừa đổi và đảo ngược lại lần nữa, khiến 2 lần bấm tự triệt tiêu nhau cả về màu hiển thị lẫn lệnh cuối cùng được gửi đi. Một lần bấm/giữ đủ lâu chỉ tạo đúng 1 sự kiện click nên không gặp lỗi này.
 - Thêm `pendingTarget{}`: theo dõi trạng thái đích mong muốn riêng cho từng nút relay (độc lập với `classList`), mỗi lần bấm đảo đúng 1 nấc so với lần bấm ngay trước đó, không phụ thuộc việc DOM đã kịp cập nhật hay chưa.
