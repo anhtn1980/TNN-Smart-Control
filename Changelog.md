@@ -6,10 +6,20 @@ Quy ước: mỗi file `.ino` có số version riêng (Semantic Versioning: MAJO
 
 ## Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino
 
+### [1.5.0] - 2026-06-20
+Rollback `waitForBytes()` (thêm ở v1.1.0) — đây là nguyên nhân thật sự khiến mirror công tắc tường mất hoàn toàn (rollback `anyClientPending()` ở v1.4.0 không đủ, vì đó không phải nguyên nhân chính). Người dùng xác nhận công tắc tường hoạt động đúng trên code gốc (trước mọi thay đổi), và hoàn toàn không phản hồi sau khi nâng cấp — trong khi lệnh ghi relay qua UI vẫn hoạt động bình thường suốt các bản trước đó.
+
+Phân tích: RS485 là bus bán song công, cần thời gian ổn định sau khi chuyển driver enable (DE_PIN) trước khi dữ liệu phản hồi đáng tin cậy. Bản gốc luôn đợi đủ `delay(60)` trước khi đọc. `waitForBytes()` ở v1.1.0 kiểm tra `RS485.available()` gần như ngay lập tức sau khi gửi lệnh đọc, nhiều khả năng bắt trúng nhiễu thoáng qua trên bus đúng lúc chuyển trạng thái driver — vì code không có xác thực CRC để loại dữ liệu rác, các byte "đủ số lượng" đó được xử lý như phản hồi thật nhưng giá trị sai/không ổn định. Vì input đọc cho mirror cần 2 lần đọc liên tiếp khớp nhau mới kích hoạt (debounce), dữ liệu không ổn định khiến điều kiện này không bao giờ thỏa — mirror coi như chết hẳn. Lệnh ghi relay (`rs485Send` đơn thuần, fire-and-forget, không đọc lại) không đi qua đường này nên không bị ảnh hưởng, giải thích vì sao UI vẫn hoạt động bình thường suốt thời gian mirror bị hỏng.
+- `readIO()`: bỏ `waitForBytes()`, quay lại `delay(60)` cố định như bản gốc cho cả 2 lần đọc (input/output).
+- Xóa macro `RS485_READ_TIMEOUT_MS` (không còn dùng).
+- `IO_POLL_INTERVAL_MS` (gating tần suất gọi `readIO()` trong `loop()`, không liên quan tới cơ chế đọc dữ liệu) được giữ nguyên — không phải nguyên nhân gây lỗi.
+
 ### [1.4.0] - 2026-06-20
 Rollback `anyClientPending()` (thêm ở v1.2.0) — sau khi test thực tế, thay đổi này làm **mất hẳn logic mirror công tắc vật lý gắn tường**. Nguyên nhân nghi ngờ: cơ chế gate "bỏ qua lượt polling I/O nếu đang có lệnh TCP chờ xử lý" có thể bị giữ đúng (luôn thấy có dữ liệu chờ) trong điều kiện thực tế, khiến vòng polling — nơi duy nhất phát hiện thay đổi từ input vật lý — gần như không bao giờ chạy. Vì lợi ích của thay đổi này (giảm độ trễ khi nhịp bấm trùng chu kỳ polling) chưa kịp xác nhận rõ ràng trong khi rủi ro gây mất hẳn 1 tính năng quan trọng là có thật, quyết định rollback hoàn toàn về logic polling thuần của v1.1.0 thay vì vá thêm.
 - Xóa hàm `anyClientPending()`.
 - `loop()`: bỏ điều kiện `!anyClientPending()` khỏi gate polling I/O, quay về đúng logic v1.1.0 (chỉ gate theo `IO_POLL_INTERVAL_MS`).
+
+(Lưu ý: sau khi nạp v1.4.0, mirror công tắc tường vẫn chưa hoạt động — nguyên nhân thật sự được xác định ở v1.5.0 là `waitForBytes()`, không phải `anyClientPending()`. Mục này giữ lại để truy vết lịch sử thay đổi.)
 
 ### [1.3.0] - 2026-06-20
 Sửa lỗi: bấm "TẮT TẤT CẢ" → đèn tắt thật nhưng nút trên UI vẫn hiện xanh (ON) vĩnh viễn cho tới khi bấm nút khác. Nguyên nhân: nhánh `set /system/all off` trong `execCommand()` không cập nhật lạc quan `outSnapshot` ngay lập tức như nhánh `/relay/.../state` vẫn làm — phản hồi trạng thái gửi về ESP32 ngay sau lệnh vẫn còn các bit ON cũ; lần đọc lại đúng 150ms sau đó chỉ sửa `outSnapshot` nội bộ trên MEGA mà không có cơ chế nào chủ động đẩy trạng thái mới đó qua lại cho client TCP.
