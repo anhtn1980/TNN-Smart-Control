@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.3.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -177,12 +177,13 @@ void handleWebRequest(EthernetClient client) {
 
     client.println("<script>");
     client.println("let lastCmdTime=0;let cmdInFlight=false;let queuedCmd=null;const CMD_COOLDOWN_MS=90;");
+    client.println("function applyStatus(t){document.getElementById('status').innerText=t;t.split(',').forEach(p=>{let kv=p.split('=');if(kv.length!=2)return;let k=kv[0].trim();let v=kv[1].trim();let b=document.getElementById(k);if(!b)return;if(v=='1')b.classList.add('on');else b.classList.remove('on');});}");
     client.println("function sendCmd(c,btn){let now=Date.now();if(now-lastCmdTime<CMD_COOLDOWN_MS){queuedCmd={c,btn};setTimeout(()=>{if(!cmdInFlight&&queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}},CMD_COOLDOWN_MS);return;}lastCmdTime=now;cmdInFlight=true;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),90);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>setTimeout(poll,80)).catch(()=>setTimeout(poll,150)).finally(()=>{cmdInFlight=false;if(queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}});}");
     client.println("function cmd(c,btn){if(cmdInFlight){queuedCmd={c,btn};return;}sendCmd(c,btn);}");
     client.println("for(let i=1;i<=16;i++){let b=document.getElementById('L'+i);if(b)b.onclick=()=>{let isOn=b.classList.contains('on');let next=!isOn;b.classList.toggle('on',next);cmd('set /relay/'+i+'/state '+(next?'true':'false'),b);};}");
     client.println("for(let i=1;i<=4;i++){let b=document.getElementById('AC'+i);if(b)b.onclick=()=>cmd('set /ac/'+i+'/pulse',b);}");
     client.println("document.getElementById('ALL').onclick=(e)=>cmd('set /system/all off',e.target);");
-    client.println("function poll(){fetch('/status').then(r=>r.text()).then(t=>{document.getElementById('status').innerText=t;t.split(',').forEach(p=>{let kv=p.split('=');if(kv.length!=2)return;let k=kv[0].trim();let v=kv[1].trim();let b=document.getElementById(k);if(!b)return;if(v=='1')b.classList.add('on');else b.classList.remove('on');});});}");
+    client.println("function poll(){fetch('/status').then(r=>r.text()).then(t=>applyStatus(t));}");
     client.println("setInterval(poll,2000);poll();");
     client.println("</script></body></html>");
 
@@ -215,7 +216,14 @@ void handleWebRequest(EthernetClient client) {
     String cmd = request.substring(s, e);
     cmd.replace("%20", " "); cmd.replace("%2F", "/");
     sendToMega(cmd);
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nOK");
+
+    // v1.3.0: trả lời ngay lập tức, KHÔNG chờ MEGA phản hồi (rollback v1.2.0)
+    // — chờ đồng bộ ở đây từng khiến mọi lần bấm bị trói vào tốc độ xử lý
+    // của MEGA, và khi nhịp bấm trùng với chu kỳ polling I/O trên MEGA thì
+    // gần như lần nào cũng bị delay tới ~150ms. UI đã tự đổi màu nút ngay
+    // khi bấm (optimistic), nên không cần chờ ở đây.
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n");
+    client.println("OK");
     client.stop();
     return;
   }
