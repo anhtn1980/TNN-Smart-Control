@@ -6,7 +6,7 @@
 #include <Ethernet2.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.3.0"
 
 /* ================= CONFIG ================= */
 #define TCP_PORT    9000
@@ -180,6 +180,13 @@ void execCommand(const char *cmd) {
 
   if (strcmp(cmd, "set /system/all off") == 0) {
     rs485Send(relayAllOff);
+    // v1.3.0: cập nhật lạc quan outSnapshot=0 ngay lập tức, khớp với cách
+    // nhánh /relay/.../state đã làm — trước đây thiếu bước này khiến phản
+    // hồi trạng thái gửi ngay về ESP32 vẫn còn các bit ON cũ (đèn đã tắt
+    // thật nhưng UI vẫn hiện xanh), vì bản sync đúng 150ms sau đó chỉ sửa
+    // outSnapshot nội bộ mà không có gì chủ động đẩy lại cho client TCP.
+    outSnapshot = 0;
+    mirrorBlockUntil = millis() + MIRROR_BLOCK_TIME;
     requestSync();
     return;
   }
