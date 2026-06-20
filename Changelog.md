@@ -6,6 +6,18 @@ Quy ước: mỗi file `.ino` có số version riêng (Semantic Versioning: MAJO
 
 ## Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino
 
+### [1.4.0] - 2026-06-20
+Rollback `anyClientPending()` (thêm ở v1.2.0) — sau khi test thực tế, thay đổi này làm **mất hẳn logic mirror công tắc vật lý gắn tường**. Nguyên nhân nghi ngờ: cơ chế gate "bỏ qua lượt polling I/O nếu đang có lệnh TCP chờ xử lý" có thể bị giữ đúng (luôn thấy có dữ liệu chờ) trong điều kiện thực tế, khiến vòng polling — nơi duy nhất phát hiện thay đổi từ input vật lý — gần như không bao giờ chạy. Vì lợi ích của thay đổi này (giảm độ trễ khi nhịp bấm trùng chu kỳ polling) chưa kịp xác nhận rõ ràng trong khi rủi ro gây mất hẳn 1 tính năng quan trọng là có thật, quyết định rollback hoàn toàn về logic polling thuần của v1.1.0 thay vì vá thêm.
+- Xóa hàm `anyClientPending()`.
+- `loop()`: bỏ điều kiện `!anyClientPending()` khỏi gate polling I/O, quay về đúng logic v1.1.0 (chỉ gate theo `IO_POLL_INTERVAL_MS`).
+
+### [1.3.0] - 2026-06-20
+Sửa lỗi: bấm "TẮT TẤT CẢ" → đèn tắt thật nhưng nút trên UI vẫn hiện xanh (ON) vĩnh viễn cho tới khi bấm nút khác. Nguyên nhân: nhánh `set /system/all off` trong `execCommand()` không cập nhật lạc quan `outSnapshot` ngay lập tức như nhánh `/relay/.../state` vẫn làm — phản hồi trạng thái gửi về ESP32 ngay sau lệnh vẫn còn các bit ON cũ; lần đọc lại đúng 150ms sau đó chỉ sửa `outSnapshot` nội bộ trên MEGA mà không có cơ chế nào chủ động đẩy trạng thái mới đó qua lại cho client TCP.
+- Thêm `outSnapshot = 0` và `mirrorBlockUntil` ngay khi xử lý `set /system/all off`, khớp với cách các lệnh relay riêng lẻ đã làm.
+
+### [1.2.0] - 2026-06-20 (ROLLBACK — xem v1.4.0)
+~~Giảm cộng hưởng giữa nhịp bấm nút dồn dập và chu kỳ polling I/O bằng cách nhường ưu tiên cho lệnh TCP, bỏ qua lượt polling nếu có lệnh đang chờ.~~ Đã rollback ở v1.4.0 do làm mất logic mirror công tắc vật lý. Giữ lại đoạn này để truy vết lịch sử thay đổi.
+
 ### [1.1.0] - 2026-06-18
 Cải thiện độ nhạy xử lý lệnh relay từ mạng (khắc phục hiện tượng phải bấm nhiều lần mới thấy relay phản hồi):
 - `readIO()`: thay `delay(60)` cố định bằng `waitForBytes()` — chờ chủ động và thoát ngay khi RS485 có đủ byte phản hồi (vẫn giữ trần an toàn 60ms qua `RS485_READ_TIMEOUT_MS`), giảm đáng kể thời gian block mỗi lần đọc I/O trong điều kiện bình thường.
@@ -18,6 +30,15 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 ---
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
+
+### [1.3.0] - 2026-06-20
+Rollback phần block đồng bộ của v1.2.0 — sau khi test thực tế, v1.2.0 khiến độ nhạy quay lại y như bản gốc (5-8 lần bấm), TỆ HƠN so với v1.1.0 (3-5 lần). Nguyên nhân: route `/cmd` ở v1.2.0 chờ đồng bộ (block tối đa 150ms) để lấy trạng thái thật từ MEGA trước khi trả lời — nhưng MEGA có vòng polling I/O định kỳ (~120ms, phục vụ mirror công tắc vật lý) khiến nó không đọc kịp lệnh TCP mới trong lúc đang polling. Vì chu kỳ polling đó gần trùng với nhịp bấm nút dồn dập, gần như mọi lần bấm đều rơi đúng lúc MEGA bận, khiến ESP32 phải chờ sát ngưỡng 150ms — lộ thẳng độ trễ xử lý của MEGA ra cho trình duyệt, thay vì giấu nó đi như trước.
+- Xóa `waitMegaStatus()` và bỏ việc chờ đồng bộ trong route `/cmd` — trả lời ngay lập tức ("OK") như trước v1.2.0.
+- JS (`/mega`): khôi phục cơ chế cũ — sau khi gửi `/cmd`, gọi `poll()` không-block (`setTimeout(poll, 80)`) để xác nhận trạng thái thật sớm mà không chặn vòng lặp chính của ESP32. `setInterval(poll, 2000)` vẫn giữ nguyên cho đồng bộ định kỳ.
+- Đi kèm với bản này là MEGA v1.2.0 (xem mục tương ứng) — phần sửa thực sự giải quyết gốc rễ độ trễ nằm ở phía MEGA: ưu tiên xử lý lệnh TCP hơn vòng polling mirror I/O.
+
+### [1.2.0] - 2026-06-18 (ROLLBACK — xem v1.3.0)
+~~Giảm thêm độ trễ mỗi lần bấm nút relay bằng cách gộp `/cmd` + `/status` thành 1 round-trip có chờ đồng bộ.~~ Đã rollback do gây regression (xem giải thích ở v1.3.0). Giữ lại đoạn này để truy vết lịch sử thay đổi.
 
 ### [1.1.0] - 2026-06-18
 Tránh mất/lỗi request khi gói TCP bị chia nhỏ:
