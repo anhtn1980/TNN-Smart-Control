@@ -6,7 +6,7 @@
 #include <Ethernet2.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.4.0"
+#define FW_VERSION "1.5.0"
 
 /* ================= CONFIG ================= */
 #define TCP_PORT    9000
@@ -21,8 +21,6 @@
 #define SCENE_PIN 30
 #define DEBOUNCE_MS 50
 
-// v1.1.0: timeout chờ phản hồi RS485 (trần an toàn, thường thoát sớm hơn nhiều)
-#define RS485_READ_TIMEOUT_MS 60
 // v1.1.0: giãn nhịp đọc I/O mirror để loop() rảnh xử lý lệnh TCP nhanh hơn
 #define IO_POLL_INTERVAL_MS 120
 
@@ -88,30 +86,29 @@ void rs485Send(const byte *cmd) {
   digitalWrite(DE_PIN, LOW);
 }
 
-// v1.1.0: chờ đủ byte phản hồi nhưng thoát ngay khi đã có đủ, thay vì
-// luôn luôn delay() cố định 60ms dù phản hồi đến sớm hơn nhiều.
-bool waitForBytes(int count, unsigned long timeoutMs) {
-  unsigned long t0 = millis();
-  while ((int)RS485.available() < count) {
-    if (millis() - t0 >= timeoutMs) return false;
-  }
-  return true;
-}
-
 bool readIO(uint16_t &inBits, uint16_t &outBits) {
   byte resp[8];
 
   while (RS485.available()) RS485.read();
 
   rs485Send(readInputsCmd);
-  if (!waitForBytes(7, RS485_READ_TIMEOUT_MS)) return false;
+  // v1.5.0: rollback về delay(60) cố định như bản gốc (đã xác nhận hoạt
+  // động đúng). waitForBytes() ở v1.1.0 kiểm tra available() gần như tức
+  // thì ngay sau khi gửi lệnh, nghi ngờ bắt trúng nhiễu thoáng qua trên
+  // bus RS485 lúc chuyển driver enable (không có CRC để loại dữ liệu rác),
+  // khiến việc đọc input cho mirror không bao giờ ổn định giữa 2 lần đọc
+  // liên tiếp — mirror công tắc tường mất hẳn dù lệnh ghi relay vẫn bình
+  // thường (rs485Send ghi không cần đọc lại nên không bị ảnh hưởng).
+  delay(60);
+  if (RS485.available() < 7) return false;
   RS485.readBytes(resp, 7);
   inBits = (resp[3] << 8) | resp[4];
 
   while (RS485.available()) RS485.read();
 
   rs485Send(readOutputsCmd);
-  if (!waitForBytes(7, RS485_READ_TIMEOUT_MS)) return false;
+  delay(60);
+  if (RS485.available() < 7) return false;
   RS485.readBytes(resp, 7);
   outBits = (resp[3] << 8) | resp[4];
 
