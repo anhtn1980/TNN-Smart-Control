@@ -41,7 +41,11 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
-### [1.3.0] - 2026-06-20
+### [1.4.0] - 2026-06-20
+Sửa lỗi: bấm nhanh liên tiếp 2 lần vào 1 nút relay không có tác dụng ("phải giữ tay/chuột đè 1 chút mới ăn"), xảy ra cả với chuột và cảm ứng. Nguyên nhân: `onclick` của mỗi nút đọc trực tiếp `classList.contains('on')` để tính trạng thái mới mỗi lần bấm — nếu bấm 2 lần rất nhanh, lần bấm thứ 2 đọc đúng màu đã bị lần 1 vừa đổi và đảo ngược lại lần nữa, khiến 2 lần bấm tự triệt tiêu nhau cả về màu hiển thị lẫn lệnh cuối cùng được gửi đi. Một lần bấm/giữ đủ lâu chỉ tạo đúng 1 sự kiện click nên không gặp lỗi này.
+- Thêm `pendingTarget{}`: theo dõi trạng thái đích mong muốn riêng cho từng nút relay (độc lập với `classList`), mỗi lần bấm đảo đúng 1 nấc so với lần bấm ngay trước đó, không phụ thuộc việc DOM đã kịp cập nhật hay chưa.
+- `applyStatus()`: đồng bộ lại `pendingTarget` theo trạng thái thật mỗi khi nhận dữ liệu từ `/status`, tránh lệch vĩnh viễn nếu có lệnh bị rớt.
+- Nút "TẮT TẤT CẢ": xóa `pendingTarget` về rỗng khi bấm, để lần bấm tiếp theo trên từng nút tính lại đúng từ trạng thái mới.
 Rollback phần block đồng bộ của v1.2.0 — sau khi test thực tế, v1.2.0 khiến độ nhạy quay lại y như bản gốc (5-8 lần bấm), TỆ HƠN so với v1.1.0 (3-5 lần). Nguyên nhân: route `/cmd` ở v1.2.0 chờ đồng bộ (block tối đa 150ms) để lấy trạng thái thật từ MEGA trước khi trả lời — nhưng MEGA có vòng polling I/O định kỳ (~120ms, phục vụ mirror công tắc vật lý) khiến nó không đọc kịp lệnh TCP mới trong lúc đang polling. Vì chu kỳ polling đó gần trùng với nhịp bấm nút dồn dập, gần như mọi lần bấm đều rơi đúng lúc MEGA bận, khiến ESP32 phải chờ sát ngưỡng 150ms — lộ thẳng độ trễ xử lý của MEGA ra cho trình duyệt, thay vì giấu nó đi như trước.
 - Xóa `waitMegaStatus()` và bỏ việc chờ đồng bộ trong route `/cmd` — trả lời ngay lập tức ("OK") như trước v1.2.0.
 - JS (`/mega`): khôi phục cơ chế cũ — sau khi gửi `/cmd`, gọi `poll()` không-block (`setTimeout(poll, 80)`) để xác nhận trạng thái thật sớm mà không chặn vòng lặp chính của ESP32. `setInterval(poll, 2000)` vẫn giữ nguyên cho đồng bộ định kỳ.
