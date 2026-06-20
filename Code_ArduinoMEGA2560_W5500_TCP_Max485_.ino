@@ -6,7 +6,7 @@
 #include <Ethernet2.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.2.0"
 
 /* ================= CONFIG ================= */
 #define TCP_PORT    9000
@@ -277,6 +277,19 @@ void handleTCP() {
   }
 }
 
+// v1.2.0: kiểm tra có client nào đang chờ lệnh xử lý không, dùng để
+// nhường ưu tiên cho xử lý lệnh TCP thay vì vòng polling mirror I/O —
+// tránh cộng hưởng giữa nhịp bấm nút dồn dập và chu kỳ polling khiến
+// lệnh bị kẹt phía sau vòng đọc RS485.
+bool anyClientPending() {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i] && clients[i].connected() && clients[i].available()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /* ================= SETUP ================= */
 void setup() {
 
@@ -318,8 +331,15 @@ void loop() {
   // v1.1.0: chỉ poll mirror mỗi IO_POLL_INTERVAL_MS thay vì mọi vòng loop(),
   // để dành chu kỳ CPU cho acceptClients()/handleTCP() xử lý lệnh relay
   // từ mạng nhanh hơn, không bị kẹt phía sau vòng polling mirror.
+  // v1.2.0: bỏ qua lượt poll này nếu đang có lệnh TCP khác chờ xử lý —
+  // tránh trường hợp bấm nút dồn dập rơi đúng nhịp polling I/O (~120ms)
+  // khiến lệnh bị delay tới gần 120ms mỗi lần do loop() còn đang bận
+  // trong readIO(). Tính năng mirror công tắc vật lý chỉ bị lùi lại nhẹ,
+  // chấp nhận được vì tốc độ thao tác công tắc tay không nhanh bằng bấm
+  // nút liên tục trên UI.
   if (!needSync && millis() > mirrorBlockUntil &&
-      millis() - lastIOPoll >= IO_POLL_INTERVAL_MS) {
+      millis() - lastIOPoll >= IO_POLL_INTERVAL_MS &&
+      !anyClientPending()) {
 
     lastIOPoll = millis();
 
