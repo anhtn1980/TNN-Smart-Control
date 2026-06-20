@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.3.0"
+#define FW_VERSION "1.5.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -26,10 +26,30 @@ const int megaPort = 9000;
 // v1.1.0: thời gian tối đa chờ đủ header HTTP trước khi bỏ cuộc
 #define REQUEST_TIMEOUT_MS 500
 
+/* ===== HTTP KEEP-ALIVE CONFIG (v1.5.0) ===== */
+// Số kết nối HTTP đồng thời tối đa được giữ mở (keep-alive). W5500 (cấu
+// hình mặc định thư viện Ethernet) chỉ có 4 socket phần cứng; 1 dành cho
+// server lắng nghe, 1 dành cho megaClient (kết nối thường trực tới MEGA),
+// nên chỉ còn tối đa 2 socket cho client web — đặt đúng bằng giới hạn đó
+// để không vượt quá khả năng phần cứng.
+#define MAX_WEB_CLIENTS 2
+// Đóng kết nối nếu không có hoạt động gì trong khoảng thời gian này (dọn
+// dẹp các tab trình duyệt bị bỏ quên/đã đóng mà không báo hiệu rõ ràng).
+// Phải lớn hơn chu kỳ poll() định kỳ của JS (2000ms) để không tự đóng kết
+// nối đang dùng bình thường.
+#define WEB_IDLE_TIMEOUT_MS 8000
+
 /* ===== SERVER ===== */
 EthernetServer server(80);
 EthernetClient megaClient;
 String globalStatus = "";
+
+// v1.5.0: giữ một vài kết nối HTTP mở lâu dài (keep-alive) thay vì mở mới
+// + đóng ngay sau mỗi request — giảm số lần mở/đóng socket trên W5500 khi
+// bấm nút dồn dập, tránh tình trạng socket bị quá tải khiến kết nối
+// megaClient (TCP tới MEGA) bị rớt liên tục.
+EthernetClient webClients[MAX_WEB_CLIENTS];
+unsigned long webLastActivity[MAX_WEB_CLIENTS] = {0};
 
 
 String normalizeStatusLine(const String &raw) {
@@ -68,16 +88,56 @@ void sendToMega(String cmd) {
   megaClient.print(cmd + "\r\n");
 }
 
+/* ===== HTTP RESPONSE HELPER (v1.5.0) ===== */
+// Gửi response kèm Content-Length chính xác + Connection: keep-alive,
+// KHÔNG đóng kết nối — bắt buộc phải có Content-Length đúng để trình
+// duyệt biết ranh giới response trên 1 kết nối được tái sử dụng nhiều lần,
+// nếu không trình duyệt sẽ treo chờ thêm dữ liệu hoặc đọc lẫn sang response
+// kế tiếp.
+void sendResponse(EthernetClient &client, const char* status, const char* contentType, const String &body) {
+  client.print("HTTP/1.1 ");
+  client.print(status);
+  client.print("\r\nContent-Type: ");
+  client.print(contentType);
+  client.print("\r\nContent-Length: ");
+  client.print(body.length());
+  client.print("\r\nConnection: keep-alive\r\n\r\n");
+  client.print(body);
+}
+
+/* ===== ACCEPT WEB CLIENTS (v1.5.0) ===== */
+void acceptWebClients() {
+  EthernetClient nc = server.available();
+  if (!nc) return;
+
+  // server.available() có thể trả về MỘT KẾT NỐI ĐÃ ĐƯỢC THEO DÕI SẴN
+  // (không chỉ kết nối mới) nếu nó đang có dữ liệu chờ đọc — kiểm tra
+  // trùng lặp trước, tránh gán cùng 1 socket vào 2 slot khác nhau (sẽ gây
+  // xung đột khi đọc dữ liệu hoặc đóng nhầm kết nối đang dùng).
+  for (int i = 0; i < MAX_WEB_CLIENTS; i++) {
+    if (webClients[i] && webClients[i] == nc) return;
+  }
+
+  for (int i = 0; i < MAX_WEB_CLIENTS; i++) {
+    if (!webClients[i] || !webClients[i].connected()) {
+      webClients[i] = nc;
+      webLastActivity[i] = millis();
+      return;
+    }
+  }
+  // Hết slot — không thể giữ thêm, đóng kết nối mới này luôn.
+  nc.stop();
+}
+
 /* ===== HTTP HANDLER ===== */
-void handleWebRequest(EthernetClient client) {
+// v1.5.0: nhận EthernetClient theo tham chiếu, không còn gọi client.stop()
+// ở các nhánh xử lý thành công — kết nối được giữ mở (keep-alive) để dùng
+// lại cho các request tiếp theo trên cùng 1 socket.
+void handleWebRequest(EthernetClient &client) {
   String request = "";
   bool headerComplete = false;
   unsigned long startWait = millis();
 
-  // v1.1.0: chờ đủ header (tối đa REQUEST_TIMEOUT_MS) thay vì bỏ cuộc ngay
-  // khi client.available() tạm thời về 0 — tránh request bị đọc cụt do
-  // TCP segmentation (request đến làm nhiều gói), từng khiến lệnh bị
-  // âm thầm bỏ qua mà không có phản hồi lỗi rõ ràng.
   while (!headerComplete && (millis() - startWait < REQUEST_TIMEOUT_MS)) {
     while (client.available()) {
       char c = client.read();
@@ -110,102 +170,96 @@ void handleWebRequest(EthernetClient client) {
 
     sendToMega("set /relay/" + relayNum + "/state " + (isOn ? "true" : "false"));
 
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
-    client.print("{\"status\":\"success\",\"relay\":"); client.print(relayNum);
-    client.print(",\"value\":"); client.print(isOn ? "true" : "false");
-    client.println("}");
-    client.stop();
+    String body = "{\"status\":\"success\",\"relay\":" + relayNum + ",\"value\":" + (isOn ? "true" : "false") + "}";
+    sendResponse(client, "200 OK", "application/json", body);
     return;
   }
 
   // ===== API STATUS JSON =====
   if (request.indexOf("GET /api/status") >= 0) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
-    client.print("{\"raw\":\""); client.print(globalStatus); client.println("\"}");
-    client.stop();
+    String body = "{\"raw\":\"" + globalStatus + "\"}";
+    sendResponse(client, "200 OK", "application/json", body);
     return;
   }
 
   /* ===== WEB UI MENU ===== */
   if (request.startsWith("GET / ")) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}h2{margin-top:10px}.menu{max-width:500px;margin:30px auto;display:grid;gap:14px;}a{display:block;padding:18px;border-radius:12px;background:#333;color:#fff;text-decoration:none;font-size:18px;border:1px solid #555;}a:hover{background:#444;}</style></head><body>");
-    client.println("<h2>TNN SI - SMART CONTROL</h2>");
-    client.println("<p>Chọn nhóm thiết bị cần điều khiển:</p>");
-    client.println("<div class='menu'>");
-    client.println("<a href='/mega'>🔌 Điều khiển thiết bị Mega</a>");
-    client.println("<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>");
-    client.println("</div></body></html>");
-    client.stop();
+    String body = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+      "<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}h2{margin-top:10px}.menu{max-width:500px;margin:30px auto;display:grid;gap:14px;}a{display:block;padding:18px;border-radius:12px;background:#333;color:#fff;text-decoration:none;font-size:18px;border:1px solid #555;}a:hover{background:#444;}</style></head><body>"
+      "<h2>TNN SI - SMART CONTROL</h2>"
+      "<p>Chọn nhóm thiết bị cần điều khiển:</p>"
+      "<div class='menu'>"
+      "<a href='/mega'>🔌 Điều khiển thiết bị Mega</a>"
+      "<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>"
+      "</div></body></html>";
+    sendResponse(client, "200 OK", "text/html; charset=UTF-8", body);
     return;
   }
 
   /* ===== WEB UI MEGA (OLD PAGE) ===== */
   if (request.startsWith("GET /mega ")) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>");
-    client.println("body{font-family:Arial;background:#111;color:#fff;text-align:center;}");
-    client.println(".top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}");
-    client.println(".back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}");
-    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;}");
-    client.println("button{height:60px;font-size:12px;border-radius:10px;border:none;background:#444;color:#fff;transition:0.1s;cursor:pointer;}");
-    client.println("button:active{transform:scale(0.95);background:#666;}");
-    client.println("button.pressing{transform:scale(0.95);background:#888;}");
-    client.println(".on{background:green;color:#fff;}");
-    client.println(".ac{background:#225588;}");
-    client.println("</style></head><body>");
+    String body = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
+    body += "<style>";
+    body += "body{font-family:Arial;background:#111;color:#fff;text-align:center;}";
+    body += ".top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}";
+    body += ".back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}";
+    body += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;}";
+    body += "button{height:60px;font-size:12px;border-radius:10px;border:none;background:#444;color:#fff;transition:0.1s;cursor:pointer;}";
+    body += "button:active{transform:scale(0.95);background:#666;}";
+    body += "button.pressing{transform:scale(0.95);background:#888;}";
+    body += ".on{background:green;color:#fff;}";
+    body += ".ac{background:#225588;}";
+    body += "</style></head><body>";
 
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>TNN SI - MEGA CONTROL</h2></div>");
+    body += "<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>TNN SI - MEGA CONTROL</h2></div>";
 
-    client.println("<h4>RELAY CONTROL (1-16)</h4><div class='grid'>");
+    body += "<h4>RELAY CONTROL (1-16)</h4><div class='grid'>";
     const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
-    for(int i=1; i<=16; i++) {
-      client.print("<button id='L"); client.print(i); client.print("'>");
-      client.print(i); client.print(". "); client.print(names[i-1]); client.println("</button>");
+    for (int i = 1; i <= 16; i++) {
+      body += "<button id='L"; body += i; body += "'>";
+      body += i; body += ". "; body += names[i-1]; body += "</button>";
     }
-    client.println("<button id='ALL' style='background:#aa0000;'>🔴 TẮT TẤT CẢ</button></div>");
+    body += "<button id='ALL' style='background:#aa0000;'>🔴 TẮT TẤT CẢ</button></div>";
 
-    client.println("<h4>EXPANSION / AC CONTROL</h4><div class='grid'>");
-    client.println("<button id='AC1' class='ac'>13. Kế toán (P)</button>");
-    client.println("<button id='AC2' class='ac'>14. P.Nguyên (P)</button>");
-    client.println("<button id='AC3' class='ac'>15. P.Họp (P)</button>");
-    client.println("<button id='AC4' class='ac'>16. P.Tuấn (P)</button></div>");
+    body += "<h4>EXPANSION / AC CONTROL</h4><div class='grid'>";
+    body += "<button id='AC1' class='ac'>13. Kế toán (P)</button>";
+    body += "<button id='AC2' class='ac'>14. P.Nguyên (P)</button>";
+    body += "<button id='AC3' class='ac'>15. P.Họp (P)</button>";
+    body += "<button id='AC4' class='ac'>16. P.Tuấn (P)</button></div>";
 
-    client.println("<pre id='status' style='font-size:10px;margin-top:20px;opacity:0.5;'>Loading...</pre>");
+    body += "<pre id='status' style='font-size:10px;margin-top:20px;opacity:0.5;'>Loading...</pre>";
 
-    client.println("<script>");
-    client.println("let lastCmdTime=0;let cmdInFlight=false;let queuedCmd=null;const CMD_COOLDOWN_MS=90;");
-    client.println("function applyStatus(t){document.getElementById('status').innerText=t;t.split(',').forEach(p=>{let kv=p.split('=');if(kv.length!=2)return;let k=kv[0].trim();let v=kv[1].trim();let b=document.getElementById(k);if(!b)return;if(v=='1')b.classList.add('on');else b.classList.remove('on');});}");
-    client.println("function sendCmd(c,btn){let now=Date.now();if(now-lastCmdTime<CMD_COOLDOWN_MS){queuedCmd={c,btn};setTimeout(()=>{if(!cmdInFlight&&queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}},CMD_COOLDOWN_MS);return;}lastCmdTime=now;cmdInFlight=true;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),90);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>setTimeout(poll,80)).catch(()=>setTimeout(poll,150)).finally(()=>{cmdInFlight=false;if(queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}});}");
-    client.println("function cmd(c,btn){if(cmdInFlight){queuedCmd={c,btn};return;}sendCmd(c,btn);}");
-    client.println("for(let i=1;i<=16;i++){let b=document.getElementById('L'+i);if(b)b.onclick=()=>{let isOn=b.classList.contains('on');let next=!isOn;b.classList.toggle('on',next);cmd('set /relay/'+i+'/state '+(next?'true':'false'),b);};}");
-    client.println("for(let i=1;i<=4;i++){let b=document.getElementById('AC'+i);if(b)b.onclick=()=>cmd('set /ac/'+i+'/pulse',b);}");
-    client.println("document.getElementById('ALL').onclick=(e)=>cmd('set /system/all off',e.target);");
-    client.println("function poll(){fetch('/status').then(r=>r.text()).then(t=>applyStatus(t));}");
-    client.println("setInterval(poll,2000);poll();");
-    client.println("</script></body></html>");
+    body += "<script>";
+    body += "let lastCmdTime=0;let cmdInFlight=false;let queuedCmd=null;const CMD_COOLDOWN_MS=90;";
+    body += "let pendingTarget={};";
+    body += "function applyStatus(t){document.getElementById('status').innerText=t;t.split(',').forEach(p=>{let kv=p.split('=');if(kv.length!=2)return;let k=kv[0].trim();let v=kv[1].trim();let b=document.getElementById(k);if(!b)return;let isOn=(v=='1');if(isOn)b.classList.add('on');else b.classList.remove('on');pendingTarget[k]=isOn;});}";
+    body += "function sendCmd(c,btn){let now=Date.now();if(now-lastCmdTime<CMD_COOLDOWN_MS){queuedCmd={c,btn};setTimeout(()=>{if(!cmdInFlight&&queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}},CMD_COOLDOWN_MS);return;}lastCmdTime=now;cmdInFlight=true;if(btn){btn.classList.add('pressing');setTimeout(()=>btn.classList.remove('pressing'),90);}fetch('/cmd?c='+encodeURIComponent(c)).then(()=>setTimeout(poll,80)).catch(()=>setTimeout(poll,150)).finally(()=>{cmdInFlight=false;if(queuedCmd){const q=queuedCmd;queuedCmd=null;sendCmd(q.c,q.btn);}});}";
+    body += "function cmd(c,btn){if(cmdInFlight){queuedCmd={c,btn};return;}sendCmd(c,btn);}";
+    body += "for(let i=1;i<=16;i++){let b=document.getElementById('L'+i);let key='L'+i;if(b)b.onclick=()=>{let current=(key in pendingTarget)?pendingTarget[key]:b.classList.contains('on');let next=!current;pendingTarget[key]=next;b.classList.toggle('on',next);cmd('set /relay/'+i+'/state '+(next?'true':'false'),b);};}";
+    body += "for(let i=1;i<=4;i++){let b=document.getElementById('AC'+i);if(b)b.onclick=()=>cmd('set /ac/'+i+'/pulse',b);}";
+    body += "document.getElementById('ALL').onclick=(e)=>{pendingTarget={};cmd('set /system/all off',e.target);};";
+    body += "function poll(){fetch('/status').then(r=>r.text()).then(t=>applyStatus(t));}";
+    body += "setInterval(poll,2000);poll();";
+    body += "</script></body></html>";
 
-    client.stop();
+    sendResponse(client, "200 OK", "text/html; charset=UTF-8", body);
     return;
   }
 
   /* ===== WEB UI AMX (NEW PAGE PLACEHOLDER) ===== */
   if (request.startsWith("GET /amx ")) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:16px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.grid{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:10px;max-width:500px;margin:20px auto;}button{height:70px;font-size:14px;border-radius:10px;border:none;background:#225588;color:#fff;}small{opacity:.75;display:block;margin-top:8px;}</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>AMX CONTROL</h2></div>");
-    client.println("<p>Trang giao diện AMX (khung cơ bản 4 nút, sẽ gắn lệnh sau).</p>");
-    client.println("<div class='grid'>");
-    client.println("<button id='AMX1'>AMX 1</button>");
-    client.println("<button id='AMX2'>AMX 2</button>");
-    client.println("<button id='AMX3'>AMX 3</button>");
-    client.println("<button id='AMX4'>AMX 4</button>");
-    client.println("</div><small>Hiện tại các nút đang ở chế độ placeholder.</small>");
-    client.println("</body></html>");
-    client.stop();
+    String body = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+      "<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:16px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.grid{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:10px;max-width:500px;margin:20px auto;}button{height:70px;font-size:14px;border-radius:10px;border:none;background:#225588;color:#fff;}small{opacity:.75;display:block;margin-top:8px;}</style></head><body>"
+      "<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>AMX CONTROL</h2></div>"
+      "<p>Trang giao diện AMX (khung cơ bản 4 nút, sẽ gắn lệnh sau).</p>"
+      "<div class='grid'>"
+      "<button id='AMX1'>AMX 1</button>"
+      "<button id='AMX2'>AMX 2</button>"
+      "<button id='AMX3'>AMX 3</button>"
+      "<button id='AMX4'>AMX 4</button>"
+      "</div><small>Hiện tại các nút đang ở chế độ placeholder.</small>"
+      "</body></html>";
+    sendResponse(client, "200 OK", "text/html; charset=UTF-8", body);
     return;
   }
 
@@ -217,24 +271,20 @@ void handleWebRequest(EthernetClient client) {
     cmd.replace("%20", " "); cmd.replace("%2F", "/");
     sendToMega(cmd);
 
-    // v1.3.0: trả lời ngay lập tức, KHÔNG chờ MEGA phản hồi (rollback v1.2.0)
-    // — chờ đồng bộ ở đây từng khiến mọi lần bấm bị trói vào tốc độ xử lý
-    // của MEGA, và khi nhịp bấm trùng với chu kỳ polling I/O trên MEGA thì
-    // gần như lần nào cũng bị delay tới ~150ms. UI đã tự đổi màu nút ngay
-    // khi bấm (optimistic), nên không cần chờ ở đây.
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n");
-    client.println("OK");
-    client.stop();
+    sendResponse(client, "200 OK", "text/plain", "OK");
     return;
   }
 
   if (request.indexOf("GET /status") >= 0) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + globalStatus);
-    client.stop();
+    sendResponse(client, "200 OK", "text/plain", globalStatus);
     return;
   }
 
-  client.stop();
+  // v1.5.0: route không khớp (vd. /favicon.ico) — PHẢI trả lời (kể cả rỗng)
+  // thay vì im lặng như trước, vì giờ kết nối được giữ mở (keep-alive); nếu
+  // không phản hồi, trình duyệt sẽ treo chờ mãi trên cùng kết nối, làm kẹt
+  // luôn các request tiếp theo xếp hàng sau nó.
+  sendResponse(client, "404 Not Found", "text/plain", "");
 }
 
 /* ===== SETUP ===== */
@@ -268,9 +318,19 @@ void setup() {
 /* ===== LOOP ===== */
 void loop() {
 
-  EthernetClient client = server.available();
-  if (client) {
-    handleWebRequest(client);
+  acceptWebClients();
+
+  for (int i = 0; i < MAX_WEB_CLIENTS; i++) {
+    if (webClients[i] && webClients[i].connected()) {
+      if (webClients[i].available()) {
+        webLastActivity[i] = millis();
+        handleWebRequest(webClients[i]);
+      } else if (millis() - webLastActivity[i] > WEB_IDLE_TIMEOUT_MS) {
+        webClients[i].stop();
+      }
+    } else if (webClients[i]) {
+      webClients[i].stop();
+    }
   }
 
   if (megaClient.connected() && megaClient.available()) {
@@ -286,7 +346,7 @@ static unsigned long t = 0;
 
 if (!megaClient.connected()) {
 
-  if (millis() - t > 3000) {   // giảm tần suất reconnect
+  if (millis() - t > 3000) {
     t = millis();
 
     Serial.println("Attempting to reconnect to Mega...");
@@ -295,7 +355,7 @@ if (!megaClient.connected()) {
 
       Serial.println("RECONNECTED OK");
 
-      delay(200); // tăng delay cho chắc
+      delay(200);
 
       megaClient.print("HELLO ESP\r\n");
 
