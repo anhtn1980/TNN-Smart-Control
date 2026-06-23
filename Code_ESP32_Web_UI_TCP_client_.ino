@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.8.0"
+#define FW_VERSION "1.8.1"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -109,8 +109,9 @@ void logoFC5(uint16_t addr, bool val) {
   };
   logoClient.write(frame, 12);
   // FC5 echo response = 12 bytes, drain để không làm nhiễu lần đọc kế tiếp
+  // yield() bên trong để nhường CPU cho watchdog và task hệ thống ESP32
   unsigned long t0 = millis();
-  while (logoClient.available() < 12 && millis() - t0 < LOGO_MODBUS_TIMEOUT_MS) {}
+  while (logoClient.available() < 12 && millis() - t0 < LOGO_MODBUS_TIMEOUT_MS) { yield(); }
   while (logoClient.available()) logoClient.read();
 }
 
@@ -152,8 +153,9 @@ void logoReadFeedback() {
   };
   logoClient.write(frame, 12);
   // Response: MBAP(6) + UnitID(1) + FC(1) + ByteCount(1) + CoilByte(1) = 10 bytes
+  // yield() bên trong để nhường CPU cho watchdog và task hệ thống ESP32
   unsigned long t0 = millis();
-  while (logoClient.available() < 10 && millis() - t0 < LOGO_MODBUS_TIMEOUT_MS) {}
+  while (logoClient.available() < 10 && millis() - t0 < LOGO_MODBUS_TIMEOUT_MS) { yield(); }
   if (logoClient.available() >= 10) {
     byte resp[10];
     logoClient.readBytes(resp, 10);
@@ -346,14 +348,10 @@ void setup() {
   delay(100);
   sendToMega("get /relay/all");
 
-  // Kết nối Modbus TCP tới LOGO!
-  if (logoClient.connect(logoIP, logoPort)) {
-    Serial.println("LOGO! connected OK");
-    delay(100);
-    logoReadFeedback();
-  } else {
-    Serial.println("LOGO! connect FAILED — se thu lai trong loop()");
-  }
+  // v1.8.1: KHÔNG connect tới LOGO! trong setup() — logoClient.connect() có thể
+  // block lâu nếu LOGO! chưa bật Modbus/không phản hồi, gây Watchdog Timer reset.
+  // Kết nối sẽ được thử trong loop() mỗi 5s, an toàn hơn nhiều.
+  Serial.println("LOGO! will connect in loop()");
 }
 
 /* ===== LOOP ===== */

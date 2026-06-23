@@ -41,7 +41,12 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
-### [1.8.0] - 2026-06-23
+### [1.8.1] - 2026-06-23
+Sửa lỗi ESP32 reset liên tục do Watchdog Timer (`rst:0x8 TG1WDT_SYS_RESET`) ngay sau khi nạp v1.8.0.
+- `setup()`: bỏ `logoClient.connect()` — kết nối TCP tới LOGO! trong `setup()` block CPU khi LOGO! chưa bật Modbus hoặc không phản hồi, đủ thời gian để ESP32 Watchdog nổ. Kết nối giờ chỉ được thử trong `loop()` mỗi 5s, nơi watchdog được feed đều đặn bởi Arduino task scheduler.
+- `logoFC5()` và `logoReadFeedback()`: thêm `yield()` vào bên trong vòng busy-wait (thay vì vòng `while()` thuần), nhường CPU cho các task hệ thống ESP32 (watchdog feeder, WiFi stack, idle task) trong thời gian chờ phản hồi Modbus.
+
+### [1.8.0] - 2026-06-23 (WATCHDOG BUG — xem v1.8.1)
 Sửa lại toàn bộ logic Modbus TCP tới LOGO! sau khi đọc tài liệu kỹ thuật đầy đủ của hệ thống. v1.7.0 sai 2 điểm nghiêm trọng: (1) địa chỉ sai — ghi thẳng Q1-Q4 (8192+) thay vì M1-M4; (2) logic sai — set ON/OFF trực tiếp thay vì gửi xung toggle.
 
 **Kiến trúc logic đúng trong LOGO!:**
