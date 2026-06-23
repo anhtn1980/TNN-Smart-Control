@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "1.8.1"
+#define FW_VERSION "1.8.5"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -25,26 +25,24 @@ const int megaPort = 9000;
 /* ===== HTTP REQUEST READ CONFIG ===== */
 #define REQUEST_TIMEOUT_MS 500
 
-/* ===== LOGO! MODBUS TCP CONFIG (v1.8.0) ===== */
+/* ===== LOGO! MODBUS TCP CONFIG (v1.8.3) ===== */
 // Model: 6ED1052-1FB08-0BA1 (LOGO! 8 0BA8) tại 192.168.1.6:502
 //
 // Kiến trúc điều khiển điều hòa trong LOGO!:
-//   Xung vào M1-M4 → B001-B004 (edge wiping relay 1s) → Q1-Q4 → relay nhấn nút ĐH
+//   Xung vào V0.4-V0.7 → (XOR + edge detect) → B001-B004 (1s pulse) → Q1-Q4 → relay ĐH
 //   Feedback: I1-I4 → M21-M24 → NQ1-NQ4 → VM V0.0-V0.3
 //
-// Modbus address (theo tài liệu LOGO! 8):
-//   ĐIỀU KHIỂN : M1-M4 = Coil 8257-8260 (1-based) → PDU address 8256-8259 (0-based)
+// Modbus address (theo tài liệu hệ thống - đường Kramer/API bên ngoài):
+//   ĐIỀU KHIỂN : V0.4-V0.7 = Coil 5-8 (1-based) → PDU address 4-7 (0-based)
+//     Kramer dùng: Write Coil 5 ON → delay → OFF để kích AC1 (tương tự AC2/3/4)
+//     M1-M4 (Coil 8257+) chỉ dùng cho LOGO! Web UI nội bộ, không phải Modbus ngoài
 //   FEEDBACK   : V0.0-V0.3 = Coil 1-4 (1-based) → PDU address 0-3 (0-based)
-//
-// Cách điều khiển: Write M bit ON → chờ 500ms (non-blocking) → Write M bit OFF
-//   LOGO! tự phát hiện cạnh → tạo xung chuẩn 1s → nhả relay → giả lập nhấn nút ĐH
-//
-// Nếu không hoạt động: thử đổi LOGO_M_ADDR sang 8257 (zero-based vs one-based ambiguity)
 const char* logoIP = "192.168.1.6";
 const int   logoPort = 502;
 #define LOGO_UNIT_ID        1
-#define LOGO_M_ADDR         8256  // PDU 0-based address cho M1 (Coil 8257 theo tài liệu)
-#define LOGO_FB_ADDR        0     // PDU 0-based address cho V0.0 (Coil 1 theo tài liệu)
+#define LOGO_M_ADDR         4     // PDU 0-based: V0.4=4, V0.5=5, V0.6=6, V0.7=7
+                                  // (Coil 5-8 theo tài liệu 1-based, đường Kramer/API)
+#define LOGO_FB_ADDR        0     // PDU 0-based: V0.0=0, V0.1=1, V0.2=2, V0.3=3
 #define LOGO_PULSE_MS       500   // thời gian giữ M bit = ON (đủ để LOGO phát hiện cạnh)
 #define LOGO_COOLDOWN_MS    1500  // tối thiểu giữa 2 lần bấm cùng kênh
 #define LOGO_MODBUS_TIMEOUT_MS 200
@@ -53,9 +51,10 @@ const int   logoPort = 502;
 /* ===== SERVER ===== */
 EthernetServer server(80);
 EthernetClient megaClient;
-EthernetClient logoClient;
+EthernetClient logoClient;   // v1.8.5: trở lại persistent connection — local EthernetClient
+                             // trong function gây xung đột socket W5500, làm hỏng megaClient
 String globalStatus = "";
-uint8_t acSnapshot = 0;        // bits 0-3 = trạng thái thật AC1-AC4 từ V0.0-V0.3
+uint8_t acSnapshot = 0;
 
 /* ===== LOGO! PULSE STATE MACHINE (v1.8.0) ===== */
 // Non-blocking: bật M bit ON ngay, state machine tắt OFF sau LOGO_PULSE_MS.
@@ -97,10 +96,16 @@ void sendToMega(String cmd) {
   megaClient.print(cmd + "\r\n");
 }
 
-/* ===== MODBUS TCP LOW LEVEL (v1.8.0) ===== */
-// Gửi FC5 Write Single Coil và drain response (không quan tâm nội dung response).
+/* ===== MODBUS TCP — LOGO! (v1.8.5) ===== */
+// Persistent connection như megaClient. Ghi FC5 với flush() để đảm bảo W5500
+// gửi ngay. Feedback poll tạm tắt để cô lập vấn đề FC5 trước.
+
+// FC5 Write Single Coil qua persistent logoClient
 void logoFC5(uint16_t addr, bool val) {
-  if (!logoClient.connected()) return;
+  if (!logoClient.connected()) {
+    Serial.print("LOGO! skip FC5 (not connected) addr=0x"); Serial.println(addr, HEX);
+    return;
+  }
   byte frame[12] = {
     0x00, 0x01, 0x00, 0x00, 0x00, 0x06,
     LOGO_UNIT_ID, 0x05,
@@ -108,61 +113,52 @@ void logoFC5(uint16_t addr, bool val) {
     (byte)(val ? 0xFF : 0x00), 0x00
   };
   logoClient.write(frame, 12);
-  // FC5 echo response = 12 bytes, drain để không làm nhiễu lần đọc kế tiếp
-  // yield() bên trong để nhường CPU cho watchdog và task hệ thống ESP32
+  logoClient.flush(); // bắt buộc: ép W5500 gửi ngay, không giữ trong buffer
+  // Drain FC5 echo response (12 bytes) — không quan tâm nội dung, chỉ dọn buffer
   unsigned long t0 = millis();
   while (logoClient.available() < 12 && millis() - t0 < LOGO_MODBUS_TIMEOUT_MS) { yield(); }
   while (logoClient.available()) logoClient.read();
+  Serial.print("LOGO! FC5 addr=0x"); Serial.print(addr, HEX);
+  Serial.println(val ? " ON" : " OFF");
 }
 
-// Gửi lệnh toggle cho kênh điều hòa ch (0-3):
-//   - Ghi M bit ON ngay lập tức (non-blocking)
-//   - Ghi OFF sau LOGO_PULSE_MS ms (do state machine trong loop() xử lý)
-//   - Có per-channel cooldown và chống pulse chồng nhau
+// Gửi xung toggle cho kênh ch (0-3) — non-blocking
 void logoSendPulse(int ch) {
   if (!logoClient.connected()) {
-    Serial.print("LOGO! not connected, skip pulse AC"); Serial.println(ch + 1);
+    Serial.print("LOGO! not connected, skip AC"); Serial.println(ch + 1);
     return;
   }
-  if (logoPulse.active) {
-    Serial.println("LOGO! pulse in progress, skip");
-    return;
-  }
+  if (logoPulse.active) { Serial.println("LOGO! pulse in progress"); return; }
   if (millis() - acCooldownMs[ch] < LOGO_COOLDOWN_MS) {
-    Serial.print("AC"); Serial.print(ch + 1); Serial.println(" cooldown, skip");
+    Serial.print("AC"); Serial.print(ch + 1); Serial.println(" cooldown");
     return;
   }
-  uint16_t addr = LOGO_M_ADDR + ch;  // M1=8256, M2=8257, M3=8258, M4=8259
-  logoFC5(addr, true);   // bật M bit ON để LOGO phát hiện cạnh
+  uint16_t addr = LOGO_M_ADDR + ch;
+  logoFC5(addr, true);
   logoPulse.active  = true;
   logoPulse.channel = ch;
   logoPulse.startMs = millis();
   acCooldownMs[ch]  = millis();
-  Serial.print("LOGO! pulse start M"); Serial.print(ch + 1);
-  Serial.print(" addr=0x"); Serial.println(addr, HEX);
+  Serial.print("LOGO! pulse ON M"); Serial.println(ch + 1);
 }
 
-// FC1 Read Coils đọc V0.0-V0.3 (feedback trạng thái thật của 4 điều hòa)
+// FC1 Read Coils V0.0-V0.3 (feedback) — chỉ gọi khi kết nối ổn định
 void logoReadFeedback() {
   if (!logoClient.connected()) return;
   byte frame[12] = {
     0x00, 0x02, 0x00, 0x00, 0x00, 0x06,
     LOGO_UNIT_ID, 0x01,
     (byte)(LOGO_FB_ADDR >> 8), (byte)(LOGO_FB_ADDR & 0xFF),
-    0x00, 0x04   // đọc 4 coils: V0.0-V0.3
+    0x00, 0x04
   };
   logoClient.write(frame, 12);
-  // Response: MBAP(6) + UnitID(1) + FC(1) + ByteCount(1) + CoilByte(1) = 10 bytes
-  // yield() bên trong để nhường CPU cho watchdog và task hệ thống ESP32
+  logoClient.flush();
   unsigned long t0 = millis();
   while (logoClient.available() < 10 && millis() - t0 < LOGO_MODBUS_TIMEOUT_MS) { yield(); }
   if (logoClient.available() >= 10) {
     byte resp[10];
     logoClient.readBytes(resp, 10);
-    // resp[7]=FC=0x01, resp[8]=byte count=1, resp[9]=coil data (bit0=V0.0, bit1=V0.1,...)
-    if (resp[7] == 0x01 && resp[8] == 0x01) {
-      acSnapshot = resp[9] & 0x0F;
-    }
+    if (resp[7] == 0x01 && resp[8] == 0x01) acSnapshot = resp[9] & 0x0F;
   }
   while (logoClient.available()) logoClient.read();
 }
@@ -347,11 +343,7 @@ void setup() {
   megaClient.print("HELLO ESP\r\n");
   delay(100);
   sendToMega("get /relay/all");
-
-  // v1.8.1: KHÔNG connect tới LOGO! trong setup() — logoClient.connect() có thể
-  // block lâu nếu LOGO! chưa bật Modbus/không phản hồi, gây Watchdog Timer reset.
-  // Kết nối sẽ được thử trong loop() mỗi 5s, an toàn hơn nhiều.
-  Serial.println("LOGO! will connect in loop()");
+  // v1.8.2: LOGO! dùng connect-per-transaction, không cần connect trong setup()
 }
 
 /* ===== LOOP ===== */
@@ -384,33 +376,33 @@ void loop() {
     }
   }
 
-  // v1.8.0: hoàn tất xung M bit (tắt OFF sau LOGO_PULSE_MS)
-  // Non-blocking: không dùng delay(), kiểm tra millis() mỗi vòng loop()
+  // v1.8.5: hoàn tất xung (tắt OFF sau LOGO_PULSE_MS) — non-blocking
   if (logoPulse.active && millis() - logoPulse.startMs >= LOGO_PULSE_MS) {
     uint16_t addr = LOGO_M_ADDR + logoPulse.channel;
-    logoFC5(addr, false);   // tắt M bit OFF → LOGO đã phát hiện cạnh, xung 1s đang chạy
-    Serial.print("LOGO! pulse end M"); Serial.println(logoPulse.channel + 1);
+    logoFC5(addr, false);
+    Serial.print("LOGO! pulse OFF M"); Serial.println(logoPulse.channel + 1);
     logoPulse.active = false;
   }
 
-  // Reconnect LOGO!
+  // Reconnect LOGO! (persistent, không gọi logoReadFeedback sau reconnect
+  // để tránh bad request làm LOGO! drop connection ngay)
   static unsigned long tLogo = 0;
   if (!logoClient.connected()) {
-    if (millis() - tLogo > 5000) {
+    if (millis() - tLogo > 8000) {
       tLogo = millis();
-      Serial.println("Attempting to reconnect to LOGO!...");
+      Serial.println("LOGO! connecting...");
       if (logoClient.connect(logoIP, logoPort)) {
-        Serial.println("LOGO! RECONNECTED OK");
-        delay(100);
-        logoReadFeedback();
+        Serial.println("LOGO! connected OK");
+      } else {
+        Serial.println("LOGO! connect FAILED");
       }
     }
   }
 
-  // Poll trạng thái AC từ LOGO! định kỳ
-  static unsigned long lastLogoPoll = 0;
-  if (logoClient.connected() && millis() - lastLogoPoll >= LOGO_POLL_MS) {
-    lastLogoPoll = millis();
-    logoReadFeedback();
-  }
+  // Feedback poll tạm TẮT — chỉ bật lại sau khi xác nhận FC5 điều khiển được
+  // static unsigned long lastLogoPoll = 0;
+  // if (logoClient.connected() && millis() - lastLogoPoll >= LOGO_POLL_MS) {
+  //   lastLogoPoll = millis();
+  //   logoReadFeedback();
+  // }
 }

@@ -41,6 +41,26 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [1.8.4] - 2026-06-23
+Sửa lỗi FC5 write không tới LOGO! dù Serial in "LOGO! FC5 ON" như thường.
+- `logoTransact()`: thêm `c.flush()` ngay sau `c.write()` — bắt buộc với thư viện Ethernet/W5500 trên ESP32 để ép buffer TCP gửi ngay lập tức. Không có `flush()`, dữ liệu nằm trong TX buffer của W5500 và không được truyền cho đến khi kết nối đóng; khi đó LOGO! đã không còn socket để gửi lệnh.
+- `logoFC5()`: đổi `expectedLen` từ `12` (chờ echo) → `0` (gửi xong đóng ngay, không chờ). Modbus write không cần xác nhận từ client, LOGO! xử lý lệnh ngay khi nhận frame. Tránh 200ms timeout không cần thiết mỗi lần bấm nút.
+- `logoFC5()`: thêm log `sent` / `FAIL` để phân biệt kết nối thành công hay thất bại.
+
+### [1.8.3] - 2026-06-23
+Sửa địa chỉ Modbus điều khiển sai. v1.8.x trước đó ghi vào M1-M4 (Coil 8257+) — đây là biến nội bộ của LOGO! Web UI, không phải đường API bên ngoài. Tài liệu hệ thống mô tả rõ 2 đường điều khiển riêng: M1-M4 cho LOGO! Web UI, và **V0.4-V0.7 (Coil 5-8)** cho Kramer/API bên ngoài. Kramer đang dùng đường này và đã được xác nhận hoạt động (Write Coil 5 ON → delay → OFF để kích AC1).
+- `LOGO_M_ADDR`: đổi từ `8256` (M1 PDU 0-based) → `4` (V0.4 PDU 0-based, Coil 5 1-based).
+- Địa chỉ feedback V0.0-V0.3 (`LOGO_FB_ADDR=0`) giữ nguyên — đúng theo tài liệu.
+
+### [1.8.2] - 2026-06-23
+Sửa lỗi LOGO! liên tục reconnect/disconnect (`LOGO! RECONNECTED OK` → ngắt ngay → lặp lại). Nguyên nhân: LOGO! Siemens không duy trì TCP connection idle — thiết bị công nghiệp tự đóng kết nối nếu không có traffic hợp lệ ngay sau khi kết nối.
+- Bỏ hoàn toàn `EthernetClient logoClient` (persistent connection) và toàn bộ reconnect logic trong loop().
+- Thêm `logoTransact(frame, len, resp, expectedLen)`: mỗi giao dịch Modbus tự **mở kết nối TCP mới → gửi frame → đọc response → đóng ngay**. Pattern này đáng tin cậy với thiết bị công nghiệp không giữ idle TCP.
+- `logoFC5()` và `logoReadFeedback()` giờ dùng `logoTransact()` thay vì ghi/đọc qua persistent client.
+- Overhead: ~10ms TCP handshake mỗi giao dịch trên LAN nội bộ — không đáng kể với chu kỳ poll 2.5s.
+- Pulse state machine (non-blocking 500ms) vẫn giữ nguyên.
+- Không cần connect LOGO! trong setup() hoặc loop().
+
 ### [1.8.1] - 2026-06-23
 Sửa lỗi ESP32 reset liên tục do Watchdog Timer (`rst:0x8 TG1WDT_SYS_RESET`) ngay sau khi nạp v1.8.0.
 - `setup()`: bỏ `logoClient.connect()` — kết nối TCP tới LOGO! trong `setup()` block CPU khi LOGO! chưa bật Modbus hoặc không phản hồi, đủ thời gian để ESP32 Watchdog nổ. Kết nối giờ chỉ được thử trong `loop()` mỗi 5s, nơi watchdog được feed đều đặn bởi Arduino task scheduler.
