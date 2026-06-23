@@ -41,6 +41,42 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [1.8.0] - 2026-06-23
+Sửa lại toàn bộ logic Modbus TCP tới LOGO! sau khi đọc tài liệu kỹ thuật đầy đủ của hệ thống. v1.7.0 sai 2 điểm nghiêm trọng: (1) địa chỉ sai — ghi thẳng Q1-Q4 (8192+) thay vì M1-M4; (2) logic sai — set ON/OFF trực tiếp thay vì gửi xung toggle.
+
+**Kiến trúc logic đúng trong LOGO!:**
+Xung vào M1-M4 → B001-B004 (edge-triggered wiping relay, tạo xung 1s) → Q1-Q4 (relay) → giả lập nhấn nút vật lý trên bảng điều khiển ĐH. Feedback: I1-I4 → M21-M24 → NQ1-NQ4 → VM V0.0-V0.3.
+
+**Modbus address map (LOGO! 8 0BA8):**
+- Điều khiển: M1=Coil8257, M2=8258, M3=8259, M4=8260 (1-based) → PDU 8256-8259 (0-based, `LOGO_M_ADDR=8256`)
+- Feedback: V0.0=Coil1, V0.1=2, V0.2=3, V0.3=4 → PDU 0-3 (`LOGO_FB_ADDR=0`)
+
+**Thay đổi code:**
+- `logoFC5(addr, val)`: helper gửi Modbus FC5 Write Single Coil và drain response.
+- `logoSendPulse(ch)`: gửi xung toggle tới M bit — bật ON ngay, **NON-BLOCKING** (không dùng `delay(500)`); state machine trong `loop()` tắt OFF sau `LOGO_PULSE_MS=500ms`. Có per-channel cooldown 1.5s và chống pulse chồng nhau.
+- `logoReadFeedback()`: FC1 đọc V0.0-V0.3 (PDU addr 0, qty 4) để lấy trạng thái thật điều hòa.
+- `loop()`: thêm xử lý hoàn tất xung M bit (non-blocking check millis()), reconnect LOGO!, periodic poll feedback 2.5s.
+- Route `/cmd`: `set /ac/x/pulse` → `logoSendPulse(ch)`. Format đổi từ `state true|false` sang `pulse` vì đây là toggle — LOGO! tự quyết trạng thái mới.
+- JS AC buttons: gửi `set /ac/x/pulse`, optimistic toggle màu nút ngay (applyStatus() sẽ sửa lại đúng sau poll 2.5s từ feedback thật).
+- CSS: thêm `button.on{background:green;}` sau `button.ac` để override màu xanh dương khi AC đang ON.
+
+**Lưu ý khi test:**
+- Nếu M bit không phản hồi: thử đổi `LOGO_M_ADDR` từ 8256 → 8257 (zero-based vs one-based ambiguity).
+- Modbus Server phải được bật trong Logo! Soft Comfort.
+
+### [1.7.0] - 2026-06-23 (SAI — xem v1.8.0)
+Tích hợp điều khiển 4 điều hòa (AC1-AC4) qua Modbus TCP trực tiếp tới LOGO! Siemens (6ED1052-1FB08-0BA1) tại 192.168.1.6:502. Trước đây các nút AC gửi `set /ac/x/pulse` lên MEGA nhưng MEGA không xử lý (vô tác dụng).
+
+Yêu cầu phần cứng/cấu hình: Modbus TCP Server phải được bật trong Logo! Soft Comfort (Device → Ethernet → Enable Modbus Server). LOGO! Q1=ĐH1 Kế Toán, Q2=ĐH2 P.Nguyên, Q3=ĐH3 P.Họp, Q4=ĐH4 P.Tuấn. Modbus coil base address Q1=8192 (0x2000, theo tài liệu LOGO! 8 0BA8) — điều chỉnh `LOGO_Q_BASE` nếu cần.
+- Thêm `logoClient` (EthernetClient): kết nối Modbus TCP bền vững tới LOGO!, tự reconnect mỗi 5s nếu rớt (tương tự `megaClient`).
+- Thêm `logoWriteCoil(ch, val)`: gửi Modbus FC5 (Write Single Coil) để bật/tắt Q1-Q4.
+- Thêm `logoReadCoils()`: gửi Modbus FC1 (Read Coils), đọc trạng thái thật Q1-Q4 về `acSnapshot`.
+- Periodic poll LOGO! mỗi 2.5s (`LOGO_POLL_MS`) để đồng bộ trạng thái AC lên UI.
+- Route `/cmd`: lệnh `set /ac/x/state true|false` được xử lý qua Modbus TCP tới LOGO! (không chuyển sang MEGA), lệnh relay/system vẫn chuyển sang MEGA như cũ.
+- Route `/status`: nối thêm `AC1=x,AC2=x,AC3=x,AC4=x` vào sau `L1-L16` — hàm `applyStatus()` phía JS tự nhận diện key AC1-AC4 và cập nhật màu nút (tận dụng cơ chế đã có, không cần thêm logic JS mới).
+- CSS: thêm `button.on{background:green;}` để override `button.ac` (blue) khi AC button ở trạng thái ON — cần thiết vì CSS specificity của `.on` (10) thấp hơn `button.ac` (11).
+- JS AC buttons: chuyển sang cơ chế `pendingTarget` + toggle state (giống relay buttons), thay cho `set /ac/x/pulse` vô tác dụng cũ.
+
 ### [1.6.0] - 2026-06-20
 Rollback HTTP keep-alive (v1.5.0) — phát hiện lỗi response trả về status 200 OK nhưng body RỖNG (xác nhận qua DevTools tab Network), dù log Serial trên ESP32 khẳng định đã gửi đủ dữ liệu (`sendResponse: ... da gui xong`). Nghi vấn lỗi nằm ở tầng buffer/timing khi tái sử dụng socket trên thư viện Ethernet/W5500 — không lộ ra qua việc đọc lại logic code (logic đọc qua hợp lý), khó chẩn đoán/sửa tiếp một cách đáng tin cậy từ xa qua nhiều vòng debug. Quyết định: rủi ro/effort của việc tiếp tục debug keep-alive không tương xứng so với mức độ nghiêm trọng của vấn đề gốc (chỉ thỉnh thoảng rớt `megaClient` khi bấm RẤT nhanh) — trong khi giao diện hiện tại hoàn toàn không dùng được.
 - Quay lại đúng cơ chế HTTP của v1.4.0: mỗi request mở 1 socket mới, `Connection: close`, `client.stop()` sau mỗi response — đã xác nhận chạy ổn định trong thực tế.
