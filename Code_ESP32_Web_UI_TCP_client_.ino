@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.4.0"
+#define FW_VERSION "2.5.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -54,17 +54,19 @@ uint8_t acSnapshot = 0;
 /* ===== AMX STATE ===== */
 uint8_t amxRelaySnapshot = 0;  // bits 0-3: relay 1-4
 uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
-uint8_t amxLastInputs    = 0;
-unsigned long amxMirrorBlockUntil = 0;
-bool amxMirrorEnabled = false;
+
+// Reconcile: khi IO thay đổi, đợi AMX_RECONCILE_DELAY_MS rồi đọc relay thật
+// và set lại nếu chưa khớp. Kramer phản hồi trước trong khoảng delay đó.
+// Cả Kramer và ESP32 đều SET đến cùng trạng thái → không xung đột.
+bool          amxNeedsReconcile = false;
+unsigned long amxReconcileAfter = 0;
+#define AMX_RECONCILE_DELAY_MS 500
 
 // Persistent connection tới CE-IO4 — Subscribe push notifications
-// CE-IO4 chỉ push khi có thay đổi, không trả response ngay trên connection mới.
-// Giữ 1 socket lâu dài, đọc non-blocking trong loop().
 EthernetClient amxIoClient;
-static String  amxIoLine = "";           // buffer dòng đang đọc dở
+String         amxIoLine = "";
 unsigned long  amxIoLastReconnect = 0;
-#define AMX_IO_RECONNECT_MS 8000         // retry mỗi 8s nếu mất kết nối
+#define AMX_IO_RECONNECT_MS 8000
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -196,7 +198,14 @@ void _parseAmxIoLine(const String& line) {
   if (!line.startsWith("update io/")) return;
   int n = line.charAt(10) - '1';  // '1'→0 .. '4'→3
   if (n < 0 || n > 3) return;
-  bitWrite(amxInputSnapshot, n, line.endsWith("true"));
+  bool newVal = line.endsWith("true");
+  if (bitRead(amxInputSnapshot, n) != newVal) {
+    bitWrite(amxInputSnapshot, n, newVal);
+    // Đặt cờ reconcile: sau AMX_RECONCILE_DELAY_MS sẽ đọc relay thật
+    // và set nếu chưa khớp IO. Delay nhường Kramer phản hồi trước.
+    amxNeedsReconcile = true;
+    amxReconcileAfter = millis() + AMX_RECONCILE_DELAY_MS;
+  }
 }
 
 void _parseAmxRelayLine(const String& line) {
@@ -254,18 +263,21 @@ void amxIoPoll() {
   }
 }
 
-void amxMirrorInputs() {
-  if (millis() < amxMirrorBlockUntil) return;
-  uint8_t changed = amxInputSnapshot ^ amxLastInputs;
-  if (!changed) return;
+// Đọc relay thật từ CE-REL8, so sánh với IO state, set nơi không khớp.
+// Chạy sau AMX_RECONCILE_DELAY_MS kể từ khi IO thay đổi.
+// Kramer thường phản hồi < 200ms → delay 500ms đủ để nhường Kramer làm trước.
+// Nếu Kramer đã set đúng → relay khớp IO → ESP32 không làm gì → 0 xung đột.
+// Nếu Kramer chưa set (giai đoạn 2) → ESP32 set → đèn phản hồi.
+void amxReconcile() {
+  amxReadRelays();  // đọc trạng thái thật từ CE-REL8
   for (int i = 0; i < 4; i++) {
-    if (bitRead(changed, i)) {
-      bool newRelay = !bitRead(amxRelaySnapshot, i);
-      amxSetRelay(i+1, newRelay);
+    bool want = bitRead(amxInputSnapshot, i);   // IO switch state
+    bool have = bitRead(amxRelaySnapshot, i);   // relay state thật
+    if (want != have) {
+      amxSetRelay(i + 1, want);
       delay(30);
     }
   }
-  amxLastInputs = amxInputSnapshot;
 }
 
 /* ===== HTTP HANDLER ===== */
@@ -409,20 +421,6 @@ void handleWebRequest(EthernetClient client) {
     client.stop(); return;
   }
 
-  // ===== AMX MIRROR TOGGLE =====
-  if (request.indexOf("GET /amx/mirror?") >= 0) {
-    int vPos = request.indexOf("enable=") + 7;
-    int vEnd = request.indexOf(" ", vPos);
-    bool wasEnabled = amxMirrorEnabled;
-    amxMirrorEnabled = (request.substring(vPos, vEnd) == "true");
-    // Seed baseline khi vừa bật mirror: tránh poll đầu tiên coi toàn bộ
-    // input đang HIGH là "thay đổi mới" và toggle relay sai.
-    if (amxMirrorEnabled && !wasEnabled) amxLastInputs = amxInputSnapshot;
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
-    client.print("{\"mirrorEnabled\":"); client.print(amxMirrorEnabled?"true":"false"); client.println("}");
-    client.stop(); return;
-  }
-
   // ===== AMX RELAY SET =====
   if (request.indexOf("GET /amx/relay?") >= 0) {
     int chPos = request.indexOf("ch=") + 3;
@@ -451,8 +449,7 @@ void handleWebRequest(EthernetClient client) {
     for (int i = 0; i < 4; i++) { client.print((amxRelaySnapshot>>i)&1); if(i<3) client.print(","); }
     client.print("],\"io\":[");
     for (int i = 0; i < 4; i++) { client.print((amxInputSnapshot>>i)&1); if(i<3) client.print(","); }
-    client.print("],\"mirrorEnabled\":"); client.print(amxMirrorEnabled?"true":"false");
-    client.println("}");
+    client.println("]}");
     client.stop(); return;
   }
 
@@ -489,9 +486,9 @@ void handleWebRequest(EthernetClient client) {
     client.println("<h4>Kiến trúc</h4>");
     client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → TCP :44197 → <code>CE-IO4 192.168.1.203</code> (4 công tắc tường)<br>");
     client.println("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ TCP :44197 → <code>CE-REL8 192.168.1.204</code> (4 relay đèn)<br>");
-    client.println("<b>Giai đoạn 1</b> (hiện tại, Kramer còn chạy): Mirror công tắc tường <b>TẮT</b> — Kramer đảm nhiệm logic.<br>");
-    client.println("<b>Giai đoạn 2</b> (sau khi Kramer ngừng): Bật Mirror — ESP32 tự mirror IO→relay.<br>");
-    client.println("Giao thức: text TCP, suffix \\n. Subscribe /io/N/digitalInput → update io/N/digitalInput true/false.");
+    client.println("Logic: IO thay đổi → đợi 500ms (nhường Kramer phản hồi trước) → đọc relay thật → SET nếu relay chưa khớp IO.<br>");
+    client.println("Cả Kramer và ESP32 đều SET đến cùng trạng thái → không xung đột, hoạt động song song.<br>");
+    client.println("Web button override vẫn hoạt động vì không tạo IO change event.");
     client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
     client.println("<span class='k'>CE-IO4 IP</span><span class='v'>192.168.1.203:44197</span>");
     client.println("<span class='k'>CE-REL8 IP</span><span class='v'>192.168.1.204:44197</span>");
@@ -503,13 +500,6 @@ void handleWebRequest(EthernetClient client) {
     client.println("</div></div>");
     client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
 
-    // Mirror control
-    client.println("<div class='section' style='margin-top:16px'>");
-    client.println("<div class='section-title'>Chế độ Mirror công tắc tường → relay</div>");
-    client.println("<div style='display:flex;align-items:center;gap:10px;background:#1a1a1a;border-radius:10px;padding:10px 14px;border:1px solid #333;'>");
-    client.println("<span id='mirror-status' style='flex:1;font-size:13px;color:#888;'>Đang tải...</span>");
-    client.println("<button id='mirror-btn' onclick='toggleMirror()' style='padding:7px 16px;border-radius:8px;border:none;background:#333;color:#fff;cursor:pointer;font-size:13px;'>...</button>");
-    client.println("</div></div>");
     // Relay section
     client.println("<div class='section'><div class='section-title'>CE-REL8 — Điều khiển đèn (Relay 1-4)</div><div class='grid'>");
     const char* amxRelayNames[] = {"Đèn 1","Đèn 2","Đèn 3","Đèn 4"};
@@ -543,14 +533,9 @@ void handleWebRequest(EthernetClient client) {
     client.println("  fetch('/amx/status').then(r=>r.json()).then(d=>{");
     client.println("    d.relay.forEach((v,i)=>{let b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingRelay[i+1]=!!v;}});");
     client.println("    d.io.forEach((v,i)=>{let el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});");
-    client.println("    let ms=document.getElementById('mirror-status'),mb=document.getElementById('mirror-btn');");
-    client.println("    _mirror=!!d.mirrorEnabled;");
-    client.println("    if(_mirror){ms.innerText='✅ Mirror BẬT — ESP32 tự điều khiển relay theo công tắc tường';ms.style.color='#86efac';mb.innerText='Tắt Mirror';mb.style.background='#4a1a1a';}");
-    client.println("    else{ms.innerText='⏸ Mirror TẮT — Kramer đang quản lý công tắc tường';ms.style.color='#888';mb.innerText='Bật Mirror';mb.style.background='#1a3a1a';}");
     client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
     client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối AMX';});");
     client.println("}");
-    client.println("let _mirror=false;function toggleMirror(){_mirror=!_mirror;fetch('/amx/mirror?enable='+_mirror).then(()=>poll());}");
     client.println("setInterval(poll,2000);poll();");
     client.println("</script></body></html>");
     client.stop(); return;
@@ -749,13 +734,16 @@ void loop() {
   }
 
   // AMX CE-IO4 — persistent connection, non-blocking
-  // Luôn duy trì kết nối để IO indicators trên UI cập nhật thật.
-  // amxIoPoll() chỉ đọc bytes đang sẵn sàng — không bao giờ block.
   if (amxIoClient.connected()) {
     amxIoPoll();
-    if (amxMirrorEnabled) amxMirrorInputs();
   } else if (millis() - amxIoLastReconnect >= AMX_IO_RECONNECT_MS) {
     amxIoLastReconnect = millis();
     amxIoConnect();
+  }
+
+  // Reconcile IO→relay sau delay (nhường Kramer phản hồi trước)
+  if (amxNeedsReconcile && millis() >= amxReconcileAfter) {
+    amxNeedsReconcile = false;
+    amxReconcile();
   }
 }
