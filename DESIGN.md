@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v2.0.0 — 2026-06-24
+> Lần cập nhật gần nhất: v2.5.x — 2026-06-24
 
 ---
 
@@ -28,11 +28,11 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
     HTTP :80
        │
 [ESP32 + W5500]  192.168.1.180
-       │                   │
-    TCP :9000         Modbus TCP :502
-       │                   │
-[MEGA2560 + W5500]   [LOGO! 8]  192.168.1.6
-  192.168.1.178
+       │              │                │               │
+    TCP :9000    Modbus TCP :504    TCP :44197      TCP :44197
+       │              │                │               │
+[MEGA2560+W5500] [LOGO! 8]        [CE-IO4]        [CE-REL8]
+ 192.168.1.178  192.168.1.6      192.168.1.7    192.168.1.204
        │
     RS485 9600
        │
@@ -41,11 +41,14 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 ### Vai trò từng thiết bị
 
-| Thiết bị | Vai trò | Firmware |
+| Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v2.0.0 |
-| MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 |
-| LOGO! 8 | Modbus TCP server port 502, điều khiển 4 điều hòa | — (Siemens) |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v2.5.x / 192.168.1.180 |
+| MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
+| LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
+| AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |
+| AMX CE-REL8 | 4 relay đèn, TCP port 44197 | — / 192.168.1.204 |
+| AMX CE-IRS4 | Cảm biến hồng ngoại (dự phòng) | — / 192.168.1.203 |
 
 ---
 
@@ -85,15 +88,17 @@ kết nối nào để drop.
 
 | Route | Mô tả |
 |---|---|
-| `GET /` | Menu chính — 4 nút điều hướng |
-| `GET /mega` | Trang 16 relay (đèn) |
-| `GET /logo` | Iframe nhúng giao diện LOGO! Web Editor (192.168.1.6/webroot/main.htm) |
-| `GET /amx` | Placeholder — phát triển sau |
-| `GET /modbus` | Placeholder — phát triển sau |
+| `GET /` | Menu chính — điều hướng các trang |
+| `GET /mega` | Trang 16 relay điều khiển đèn (MEGA2560) |
+| `GET /modbus` | Trang 4 điều hòa (LOGO! 8 Modbus TCP) |
+| `GET /amx` | Trang AMX: 4 relay đèn (CE-REL8) + 4 công tắc tường (CE-IO4) |
+| `GET /kios` | Trang nhúng web 3rd-party (KC-Brain, SL-240C, URL tùy chọn) |
 | `GET /cmd?c=<lệnh>` | Gửi lệnh tới MEGA qua `megaTransact()` |
 | `GET /status` | Trả cached `globalStatus` (L1=0,...,L16=0) |
-| `GET /set?relay=N&value=true\|false` | API đặt trạng thái relay |
-| `GET /api/status` | JSON: `{"raw":"L1=0,..."}` |
+| `GET /ac/toggle?ch=N` | Toggle điều hòa N (1-4) qua LOGO! pulse pattern |
+| `GET /ac/status` | JSON trạng thái 4 điều hòa từ LOGO! feedback V0.0-V0.3 |
+| `GET /amx/relay?ch=N&value=true\|false` | Set relay CE-REL8 kênh N |
+| `GET /amx/status` | JSON: `{"relay":[...],"io":[...]}` trạng thái CE-REL8 + CE-IO4 |
 
 ### 3.3 JavaScript UI (trang /mega)
 
@@ -232,7 +237,55 @@ trước, quay lại iframe → nhấn "Tải lại" để dùng session cookie.
 
 ---
 
-## 6. Lịch sử lỗi quan trọng & bài học
+## 6. Kiến trúc AMX (CE-IO4 + CE-REL8)
+
+### 6.1 Thiết bị
+
+| Thiết bị | IP | Port | Vai trò |
+|---|---|---|---|
+| CE-IO4 | 192.168.1.7 | 44197 | 4 công tắc tường (digital input) |
+| CE-REL8 | 192.168.1.204 | 44197 | 4 relay điều khiển đèn |
+| CE-IRS4 | 192.168.1.203 | 44197 | Cảm biến IR (dự phòng, không dùng trong dự án này) |
+
+### 6.2 Giao thức TCP AMX
+
+Định dạng text, suffix `\n` (0x0A):
+
+| Lệnh | Chiều | Mô tả |
+|---|---|---|
+| `get /io/N/digitalInput` | → CE-IO4 | Đọc trạng thái công tắc N (1-4) |
+| `update /io/N/digitalInput true\|false` | CE-IO4 → | Response trạng thái |
+| `get /relay/N/state` | → CE-REL8 | Đọc trạng thái relay N (1-4) |
+| `update /relay/N/state true\|false` | CE-REL8 → | Response trạng thái |
+| `set /relay/N/state true\|false` | → CE-REL8 | Đặt trạng thái relay N |
+
+**Lưu ý**: `Subscribe /io/N/digitalInput` trả lỗi `"unknown path"` trên firmware CE-IO4 thực tế — dùng polling `get` thay thế (mỗi 800ms).
+
+CE-IO4 cần được cấu hình `inputMode = DIGITAL` trước khi đọc được `digitalInput`. Nếu `set /io/N/inputMode DIGITAL` qua TCP không hoạt động → cấu hình thủ công qua web UI `http://192.168.1.7`.
+
+### 6.3 Logic toggle công tắc tường (v2.5.x)
+
+```
+CE-IO4 thay đổi trạng thái (bất kể bật→tắt hay tắt→bật)
+  → ESP32 ghi nhận: amxPendingToggle[N] = true
+                    amxRelayBeforeIO = relay snapshot hiện tại
+  → Chờ 500ms (nhường Kramer phản hồi trước)
+  → Đọc relay thật từ CE-REL8
+  → Nếu relay[N] chưa thay đổi → Kramer chưa xử lý → ESP32 toggle relay[N]
+  → Nếu relay[N] đã thay đổi  → Kramer đã xử lý   → ESP32 bỏ qua
+```
+
+**Nguyên tắc**: Cả Kramer và ESP32 đều toggle — nhưng chỉ 1 bên thực sự toggle vì bên kia đã làm rồi. Không xung đột, hoạt động song song.
+
+**Web button**: Gọi `set /relay/N/state` trực tiếp → không tạo IO change event → không ảnh hưởng logic toggle.
+
+### 6.4 Kết nối connect-per-transaction
+
+Giống MEGA và LOGO!, AMX dùng `amxMultiQuery()`: mở TCP → gửi N lệnh → đọc tối đa N dòng response → đóng. Không giữ persistent connection trừ trường hợp đặc biệt.
+
+---
+
+## 7. Lịch sử lỗi quan trọng & bài học
 
 | Lỗi | Nguyên nhân gốc | Cách sửa | Bài học |
 |---|---|---|---|
@@ -247,7 +300,7 @@ trước, quay lại iframe → nhấn "Tải lại" để dùng session cookie.
 
 ---
 
-## 7. Quy tắc không làm lại (regressions to avoid)
+## 8. Quy tắc không làm lại (regressions to avoid)
 
 Những thay đổi đã thử và gây ra vấn đề nghiêm trọng:
 
@@ -260,13 +313,13 @@ Những thay đổi đã thử và gây ra vấn đề nghiêm trọng:
 
 ---
 
-## 8. Cấu trúc file & version hiện tại
+## 9. Cấu trúc file & version hiện tại
 
 ```
-Code_ESP32_Web_UI_TCP_client_.ino    v2.0.0   ESP32 Web server + gateway
-Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino  v1.5.0   MEGA RS485 controller
-CHANGELOG.md                                  Lịch sử thay đổi theo version
-DESIGN.md                                     File này
+Code_ESP32_Web_UI_TCP_client_.ino              v2.5.x   ESP32 Web server + gateway
+Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino     v1.5.0   MEGA RS485 controller
+DESIGN.md                                               File này
+HuongDanSuDung.doc                                      Hướng dẫn sử dụng người dùng cuối
 ```
 
 ### Thư viện cần thiết
@@ -278,26 +331,28 @@ DESIGN.md                                     File này
 
 ---
 
-## 9. Tình trạng phát triển hiện tại
+## 10. Tình trạng phát triển hiện tại
 
 ### Đã hoàn thiện ✅
-- 16 relay điều khiển đèn qua UI web + công tắc vật lý + scene switch
+- 16 relay điều khiển đèn qua UI web + công tắc vật lý + scene switch (MEGA)
 - Nút bấm dồn dập nhanh hoạt động đúng (v2.0.0)
 - "TẮT TẤT CẢ" đồng bộ UI đúng
-- Menu 4 trang: /mega /logo /amx /modbus
-- /logo: iframe LOGO! Web Editor với fallback + reload
+- Menu: / → /mega, /modbus, /amx, /kios
+- /modbus: điều khiển 4 điều hòa qua LOGO! 8 Modbus TCP (pulse pattern)
+- /amx: CE-REL8 4 relay + CE-IO4 4 công tắc tường, polling 800ms
+- /amx toggle logic: IO thay đổi → toggle relay (không map 1-1 trạng thái)
+- /amx Kramer co-existence: ESP32 nhường 500ms, chỉ toggle nếu Kramer chưa làm
+- /kios: nhúng web KC-Brain, SL-240C, URL tùy chọn
 
-### Chưa phát triển 🔲
-- **Trang /modbus**: điều khiển điều hòa qua Modbus TCP trực tiếp từ ESP32 UI
-  - Backend đã có: `logoTransact()`, `logoFC5()`, `logoSendPulse()`
-  - Cần: trang UI với 4 nút + feedback trạng thái thật từ V0.0-V0.3
-- **Trang /amx**: điều khiển thiết bị AMX
+### Còn hạn chế / chưa xác nhận 🔲
+- CE-IO4: `Subscribe` path không hoạt động → polling `get` mỗi 800ms (độ trễ tối đa 800ms)
+- CE-IO4: `set /io/N/inputMode DIGITAL` qua TCP chưa xác nhận — nếu lỗi cần cấu hình thủ công tại `http://192.168.1.7`
 - Timeout client TCP trên MEGA (`CLIENT_TIMEOUT = 10000` định nghĩa nhưng chưa dùng)
 - Xác thực CRC cho RS485 frame
 
 ---
 
-## 10. Thông tin dự án
+## 11. Thông tin dự án
 
 | | |
 |---|---|
