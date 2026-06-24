@@ -618,7 +618,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("<input id='url-input' type='text' placeholder='http://...' />");
     client.println("<button class='btn btn-go' onclick='goCustom()'>▶ Mở</button>");
     client.println("<button class='btn' style='background:#333;' onclick='openNew()'>↗ Tab mới</button></div>");
-    client.println("<div class='hint' id='hint'>⚠️ Nếu thấy trang đăng nhập: nhấn ↗ Tab mới → đăng nhập → quay lại → 🔄</div>");
+    client.println("<div class='hint' id='hint'></div>");
     client.println("<iframe id='kf' src=''></iframe>");
     client.println("<script>");
     client.println("var sites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
