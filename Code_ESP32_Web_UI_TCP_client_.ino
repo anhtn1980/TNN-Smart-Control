@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.1.0"
+#define FW_VERSION "2.2.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -24,6 +24,14 @@ const int megaPort = 9000;
 // v2.0.0: timeout chờ MEGA phản hồi — MEGA có thể delay tối đa ~120ms (readIO x2)
 #define MEGA_TIMEOUT_MS 300
 
+/* ===== AMX CONFIG ===== */
+const char* amxIoIP    = "192.168.1.181";  // CE-IO4  — cập nhật IP thực tế
+const char* amxRelayIP = "192.168.1.182";  // CE-REL8 — cập nhật IP thực tế
+const int   amxPort    = 44197;
+#define AMX_TRANSACT_TIMEOUT_MS 400
+#define AMX_MIRROR_BLOCK_MS     400
+#define AMX_IO_POLL_MS          500
+
 /* ===== LOGO! MODBUS TCP CONFIG ===== */
 const char* logoIP = "192.168.1.6";
 const int   logoPort = 504;
@@ -42,6 +50,12 @@ EthernetServer server(80);
 // Mỗi lệnh relay: connect → gửi → đọc response → disconnect. Không bao giờ stale.
 String globalStatus = "";
 uint8_t acSnapshot = 0;
+
+/* ===== AMX STATE ===== */
+uint8_t amxRelaySnapshot = 0;  // bits 0-3: relay 1-4
+uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
+uint8_t amxLastInputs    = 0;
+unsigned long amxMirrorBlockUntil = 0;
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -147,6 +161,77 @@ bool readACFeedback() {
   return true;
 }
 
+/* ===== AMX — connect-per-transaction ===== */
+// Gửi nhiều lệnh trong 1 connection, đọc đến maxLines dòng response.
+// Mỗi dòng được trả về qua callback onLine(String&).
+bool amxMultiQuery(const char* deviceIP, const String* cmds, int numCmds,
+                   void (*onLine)(const String&), int maxLines) {
+  EthernetClient c;
+  if (!c.connect(deviceIP, amxPort)) return false;
+  for (int i = 0; i < numCmds; i++) { c.print(cmds[i] + "\n"); }
+  unsigned long t0 = millis(); int got = 0; String line = "";
+  while (got < maxLines && millis() - t0 < AMX_TRANSACT_TIMEOUT_MS) {
+    while (c.available()) {
+      char ch = c.read();
+      if (ch == '\n') { if (line.length()) { onLine(line); got++; } line = ""; }
+      else if (ch != '\r') line += ch;
+    }
+    yield();
+  }
+  c.stop();
+  return got > 0;
+}
+
+void _parseAmxIoLine(const String& line) {
+  // "update io/N/digitalInput true|false"
+  if (!line.startsWith("update io/")) return;
+  int n = line.charAt(10) - '1';  // '1'→0 .. '4'→3
+  if (n < 0 || n > 3) return;
+  bitWrite(amxInputSnapshot, n, line.endsWith("true"));
+}
+
+void _parseAmxRelayLine(const String& line) {
+  // "update /relay/N/state true|false"
+  if (!line.startsWith("update /relay/")) return;
+  int n = line.charAt(14) - '1'; // '1'→0 .. '4'→3
+  if (n < 0 || n > 3) return;
+  bitWrite(amxRelaySnapshot, n, line.endsWith("true"));
+}
+
+bool amxReadInputs() {
+  String cmds[4];
+  for (int i = 0; i < 4; i++) cmds[i] = "Subscribe /io/" + String(i+1) + "/digitalInput";
+  return amxMultiQuery(amxIoIP, cmds, 4, _parseAmxIoLine, 4);
+}
+
+bool amxReadRelays() {
+  String cmds[4];
+  for (int i = 0; i < 4; i++) cmds[i] = "Subscribe /relay/" + String(i+1) + "/state";
+  return amxMultiQuery(amxRelayIP, cmds, 4, _parseAmxRelayLine, 4);
+}
+
+void amxSetRelay(int ch, bool val) {
+  // ch = 1..4
+  String cmd = "set /relay/" + String(ch) + "/state " + (val ? "true" : "false");
+  String cmds[1] = {cmd};
+  amxMultiQuery(amxRelayIP, cmds, 1, _parseAmxRelayLine, 1);
+  bitWrite(amxRelaySnapshot, ch-1, val);  // optimistic update
+}
+
+void amxMirrorInputs() {
+  if (millis() < amxMirrorBlockUntil) return;
+  uint8_t changed = amxInputSnapshot ^ amxLastInputs;
+  if (!changed) return;
+  for (int i = 0; i < 4; i++) {
+    if (bitRead(changed, i)) {
+      bool newRelay = !bitRead(amxRelaySnapshot, i);
+      amxSetRelay(i+1, newRelay);
+      delay(30);
+    }
+  }
+  amxLastInputs = amxInputSnapshot;
+}
+
 /* ===== HTTP HANDLER ===== */
 void handleWebRequest(EthernetClient client) {
   String request = "";
@@ -224,9 +309,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("<h2>TNN SI - SMART CONTROL</h2><p>Chọn nhóm thiết bị cần điều khiển:</p>");
     client.println("<div class='menu'>");
     client.println("<a href='/mega'>🔌 Điều khiển Đèn (MEGA)</a>");
-    client.println("<a href='/logo'>❄️ Điều khiển Điều hòa (LOGO!)</a>");
+    client.println("<a href='/modbus'>❄️ Điều khiển Điều hòa (LOGO!)</a>");
     client.println("<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>");
-    client.println("<a href='/modbus'>⚙️ Điều khiển Modbus TCP</a>");
     client.println("</div></body></html>");
     client.stop(); return;
   }
@@ -268,17 +352,34 @@ void handleWebRequest(EthernetClient client) {
     client.stop(); return;
   }
 
-  /* ===== WEB UI LOGO! ===== */
-  if (request.startsWith("GET /logo ")) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>*{margin:0;padding:0;box-sizing:border-box;}body{display:flex;flex-direction:column;height:100vh;background:#111;font-family:Arial;}.bar{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap;}.back{padding:6px 10px;border-radius:7px;background:#333;color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;}.back:hover{background:#444;}.title{color:#fff;font-size:14px;font-weight:bold;flex:1;}.btn{padding:6px 10px;border-radius:7px;color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;cursor:pointer;border:none;}.btn-blue{background:#225588;}.btn-green{background:#226633;}.hint{background:#2a2000;border-bottom:1px solid #554400;padding:8px 12px;font-size:12px;color:#ffcc66;flex-shrink:0;}.hint b{color:#ffee99;}iframe{flex:1;width:100%;border:none;}</style></head><body>");
-    client.println("<div class='bar'><a class='back' href='/'>⬅ Menu</a><span class='title'>❄️ Điều hòa (LOGO!)</span>");
-    client.println("<a class='btn btn-blue' href='http://192.168.1.6/webroot/main.htm' target='_blank'>↗ Mở mới</a>");
-    client.println("<button class='btn btn-green' onclick='document.getElementById(\"lf\").src=document.getElementById(\"lf\").src'>🔄 Tải lại</button></div>");
-    client.println("<div class='hint'>⚠️ Nếu thấy trang đăng nhập: nhấn <b>↗ Mở mới</b> → đăng nhập → quay lại → nhấn <b>🔄 Tải lại</b></div>");
-    client.println("<iframe id='lf' src='http://192.168.1.6/webroot/main.htm'></iframe>");
-    client.println("</body></html>");
+  // ===== AMX RELAY SET =====
+  if (request.indexOf("GET /amx/relay?") >= 0) {
+    int chPos = request.indexOf("ch=") + 3;
+    int chEnd = request.indexOf("&", chPos); if (chEnd < 0) chEnd = request.indexOf(" ", chPos);
+    int vPos  = request.indexOf("value=") + 6;
+    int vEnd  = request.indexOf(" ", vPos);
+    int ch = request.substring(chPos, chEnd).toInt();
+    bool val = request.substring(vPos, vEnd) == "true";
+    if (ch >= 1 && ch <= 4) {
+      amxSetRelay(ch, val);
+      amxMirrorBlockUntil = millis() + AMX_MIRROR_BLOCK_MS;
+    }
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"ch\":"); client.print(ch);
+    client.print(",\"value\":"); client.print(val?"true":"false"); client.println("}");
+    client.stop(); return;
+  }
+
+  // ===== AMX STATUS =====
+  if (request.indexOf("GET /amx/status") >= 0) {
+    amxReadRelays();
+    amxReadInputs();
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"relay\":[");
+    for (int i = 0; i < 4; i++) { client.print((amxRelaySnapshot>>i)&1); if(i<3) client.print(","); }
+    client.print("],\"io\":[");
+    for (int i = 0; i < 4; i++) { client.print((amxInputSnapshot>>i)&1); if(i<3) client.print(","); }
+    client.println("]}");
     client.stop(); return;
   }
 
@@ -286,11 +387,64 @@ void handleWebRequest(EthernetClient client) {
   if (request.startsWith("GET /amx ")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:16px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.grid{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:10px;max-width:500px;margin:20px auto;}button{height:70px;font-size:14px;border-radius:10px;border:none;background:#225588;color:#fff;}small{opacity:.75;display:block;margin-top:8px;}</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>AMX CONTROL</h2></div>");
-    client.println("<p>Trang giao diện AMX (khung cơ bản 4 nút, sẽ gắn lệnh sau).</p>");
-    client.println("<div class='grid'><button>AMX 1</button><button>AMX 2</button><button>AMX 3</button><button>AMX 4</button></div>");
-    client.println("<small>Hiện tại các nút đang ở chế độ placeholder.</small></body></html>");
+    client.println("<style>");
+    client.println("body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:0;}");
+    client.println(".top{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a1a;border-bottom:1px solid #333;flex-wrap:wrap;}");
+    client.println(".back{padding:7px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;font-size:14px;}");
+    client.println(".back:hover{background:#444;} h2{margin:0;font-size:16px;flex:1;}");
+    client.println(".section{max-width:600px;margin:20px auto;padding:0 14px;}");
+    client.println(".section-title{text-align:left;font-size:12px;color:#888;text-transform:uppercase;margin-bottom:8px;letter-spacing:1px;}");
+    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;}");
+    client.println(".relay-btn{height:80px;border-radius:12px;border:2px solid #444;background:#222;color:#fff;font-size:13px;font-weight:bold;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;transition:0.15s;}");
+    client.println(".relay-btn .icon{font-size:22px;} .relay-btn.on{background:#1a4a1a;border-color:#2d8a2d;color:#86efac;}");
+    client.println(".relay-btn.on .icon{color:#86efac;} .relay-btn:active{transform:scale(0.96);}");
+    client.println(".io-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:0;}");
+    client.println(".io-indicator{padding:10px 6px;border-radius:10px;border:1px solid #333;background:#1a1a1a;font-size:11px;color:#888;}");
+    client.println(".io-indicator.active{border-color:#55aaff;color:#55aaff;background:#0a1a2a;}");
+    client.println(".io-dot{width:10px;height:10px;border-radius:50%;background:#333;margin:4px auto 0;}");
+    client.println(".io-indicator.active .io-dot{background:#55aaff;}");
+    client.println("#status-bar{font-size:11px;opacity:0.4;margin:12px 0;}");
+    client.println("</style></head><body>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🧩 AMX CONTROL</h2></div>");
+
+    // Relay section
+    client.println("<div class='section'><div class='section-title'>CE-REL8 — Điều khiển đèn (Relay 1-4)</div><div class='grid'>");
+    const char* amxRelayNames[] = {"Đèn 1","Đèn 2","Đèn 3","Đèn 4"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='relay-btn' id='R"); client.print(i+1); client.print("' onclick='toggleRelay("); client.print(i+1); client.println(")'>");
+      client.println("<span class='icon'>💡</span>");
+      client.print("<span>Relay "); client.print(i+1); client.print(" — "); client.print(amxRelayNames[i]); client.println("</span></button>");
+    }
+    client.println("</div></div>");
+
+    // IO section
+    client.println("<div class='section'><div class='section-title'>CE-IO4 — Công tắc tường (IO Input 1-4)</div><div class='io-grid'>");
+    const char* amxIoNames[] = {"IO 1","IO 2","IO 3","IO 4"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<div class='io-indicator' id='IO"); client.print(i+1); client.println("'>");
+      client.print(amxIoNames[i]); client.println("<div class='io-dot'></div></div>");
+    }
+    client.println("</div></div>");
+    client.println("<div id='status-bar'>Đang tải...</div>");
+
+    client.println("<script>");
+    client.println("let pendingRelay={};");
+    client.println("function toggleRelay(ch){");
+    client.println("  let btn=document.getElementById('R'+ch);");
+    client.println("  let current=(ch in pendingRelay)?pendingRelay[ch]:btn.classList.contains('on');");
+    client.println("  let next=!current; pendingRelay[ch]=next;");
+    client.println("  btn.classList.toggle('on',next);");
+    client.println("  fetch('/amx/relay?ch='+ch+'&value='+next).then(()=>setTimeout(poll,300)).catch(()=>setTimeout(poll,500));");
+    client.println("}");
+    client.println("function poll(){");
+    client.println("  fetch('/amx/status').then(r=>r.json()).then(d=>{");
+    client.println("    d.relay.forEach((v,i)=>{let b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingRelay[i+1]=!!v;}});");
+    client.println("    d.io.forEach((v,i)=>{let el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});");
+    client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
+    client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối AMX';});");
+    client.println("}");
+    client.println("setInterval(poll,2000);poll();");
+    client.println("</script></body></html>");
     client.stop(); return;
   }
 
@@ -407,5 +561,14 @@ void loop() {
   if (millis() - lastSync >= 3000) {
     lastSync = millis();
     megaTransact("get /relay/all");
+  }
+
+  // AMX IO polling + mirror công tắc tường → relay
+  static unsigned long lastAmxPoll = 0;
+  if (millis() - lastAmxPoll >= AMX_IO_POLL_MS) {
+    lastAmxPoll = millis();
+    if (amxReadInputs()) {
+      amxMirrorInputs();
+    }
   }
 }
