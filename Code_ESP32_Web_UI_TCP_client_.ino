@@ -443,6 +443,11 @@ void handleWebRequest(EthernetClient client) {
     client.println(".io-dot{width:10px;height:10px;border-radius:50%;background:#333;margin:4px auto 0;}");
     client.println(".io-indicator.active .io-dot{background:#55aaff;}");
     client.println("#status-bar{font-size:11px;opacity:0.4;margin:12px 0;}");
+    client.println(".info-btn{padding:6px 10px;border-radius:7px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:13px;}");
+    client.println(".info-btn:hover{background:#333;color:#fff;}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:14px 16px;font-size:12px;line-height:1.7;color:#bbb;}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 6px;font-size:13px;} .info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 5px;border-radius:4px;}");
+    client.println(".info-panel .cfg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:8px;} .cfg .k{color:#888;} .cfg .v{color:#7dd3fc;font-family:monospace;}");
     client.println("</style></head><body>");
     client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🧩 AMX CONTROL</h2>");
     client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
