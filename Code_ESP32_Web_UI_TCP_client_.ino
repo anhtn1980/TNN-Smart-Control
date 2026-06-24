@@ -29,7 +29,6 @@ const char* amxIoIP    = "192.168.1.203";  // CE-IO4
 const char* amxRelayIP = "192.168.1.204";  // CE-REL8
 const int   amxPort    = 44197;
 #define AMX_TRANSACT_TIMEOUT_MS 400
-#define AMX_MIRROR_BLOCK_MS     400
 #define AMX_IO_POLL_MS          500
 
 /* ===== LOGO! MODBUS TCP CONFIG ===== */
@@ -431,7 +430,6 @@ void handleWebRequest(EthernetClient client) {
     bool val = request.substring(vPos, vEnd) == "true";
     if (ch >= 1 && ch <= 4) {
       amxSetRelay(ch, val);
-      amxMirrorBlockUntil = millis() + AMX_MIRROR_BLOCK_MS;
     }
     client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
     client.print("{\"ch\":"); client.print(ch);
