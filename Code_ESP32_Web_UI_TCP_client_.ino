@@ -711,13 +711,13 @@ void loop() {
     megaTransact("get /relay/all");
   }
 
-  // AMX IO polling — luôn đọc để hiển thị trạng thái công tắc tường trên UI
-  // Mirror chỉ chạy khi amxMirrorEnabled = true (giai đoạn 2, sau khi Kramer ngừng)
+  // AMX IO polling — chỉ chạy khi mirror BẬT (giai đoạn 2, Kramer đã ngừng).
+  // Khi mirror TẮT: IO status vẫn được đọc on-demand qua /amx/status mỗi
+  // khi browser poll — không cần loop chủ động. Tránh block loop() 400ms
+  // mỗi 500ms khi AMX device chưa kết nối thật.
   static unsigned long lastAmxPoll = 0;
-  if (millis() - lastAmxPoll >= AMX_IO_POLL_MS) {
+  if (amxMirrorEnabled && millis() - lastAmxPoll >= AMX_IO_POLL_MS) {
     lastAmxPoll = millis();
-    if (amxReadInputs() && amxMirrorEnabled) {
-      amxMirrorInputs();
-    }
+    if (amxReadInputs()) amxMirrorInputs();
   }
 }
