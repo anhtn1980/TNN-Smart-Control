@@ -193,9 +193,9 @@ bool amxMultiQuery(const char* deviceIP, const String* cmds, int numCmds,
 }
 
 void _parseAmxIoLine(const String& line) {
-  // "update /io/N/digitalInput true|false"
-  if (!line.startsWith("update /io/")) return;
-  int n = line.charAt(11) - '1';  // '1'→0 .. '4'→3
+  // "update io/N/digitalInput true|false"  (no leading slash per driver)
+  if (!line.startsWith("update io/")) return;
+  int n = line.charAt(10) - '1';  // '1'→0 .. '4'→3
   if (n < 0 || n > 3) return;
   bool newVal = line.endsWith("true");
   if (bitRead(amxInputSnapshot, n) != newVal) {
@@ -235,13 +235,19 @@ void amxSetRelay(int ch, bool val) {
   bitWrite(amxRelaySnapshot, ch-1, val);  // optimistic update
 }
 
-// Kết nối persistent tới CE-IO4, Subscribe 4 IO inputs.
-// CE-IO4 push: "update /io/N/digitalInput true|false" mỗi khi thay đổi.
+// Kết nối persistent tới CE-IO4, set INPUT mode rồi Subscribe 4 IO inputs.
+// CE-IO4 push: "update io/N/digitalInput true|false" mỗi khi thay đổi.
 bool amxIoConnect() {
   amxIoClient.stop();
   if (!amxIoClient.connect(amxIoIP, amxPort)) return false;
+  // Đảm bảo port ở INPUT mode trước khi Subscribe
+  for (int i = 1; i <= 4; i++) {
+    amxIoClient.print(String("set /io/") + i + "/mode INPUT\n");
+    delay(30);
+  }
   for (int i = 1; i <= 4; i++) {
     amxIoClient.print(String("Subscribe /io/") + i + "/digitalInput\n");
+    delay(30);
   }
   amxIoLine = "";
   Serial.println("AMX IO connected & subscribed");
