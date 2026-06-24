@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.0.0"
+#define FW_VERSION "2.1.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -26,7 +26,7 @@ const int megaPort = 9000;
 
 /* ===== LOGO! MODBUS TCP CONFIG ===== */
 const char* logoIP = "192.168.1.6";
-const int   logoPort = 502;
+const int   logoPort = 504;
 #define LOGO_UNIT_ID        1
 #define LOGO_M_ADDR         4
 #define LOGO_FB_ADDR        0
@@ -136,6 +136,17 @@ void logoSendPulse(int ch) {
   acCooldownMs[ch] = millis();
 }
 
+bool readACFeedback() {
+  // FC1 Read Coils — đọc V0.0-V0.3 (feedback trạng thái thật từ LOGO!)
+  byte req[12] = {0x00,0x02,0x00,0x00,0x00,0x06,LOGO_UNIT_ID,0x01,
+    (byte)(LOGO_FB_ADDR>>8),(byte)(LOGO_FB_ADDR&0xFF),0x00,0x04};
+  byte resp[10];
+  if (!logoTransact(req, 12, resp, 10)) return false;
+  // resp[9] = coil status byte: bit0=ĐH1, bit1=ĐH2, bit2=ĐH3, bit3=ĐH4
+  acSnapshot = resp[9] & 0x0F;
+  return true;
+}
+
 /* ===== HTTP HANDLER ===== */
 void handleWebRequest(EthernetClient client) {
   String request = "";
@@ -151,6 +162,35 @@ void handleWebRequest(EthernetClient client) {
     yield();
   }
   if (!headerComplete) { client.stop(); return; }
+
+  // ===== AC TOGGLE =====
+  if (request.indexOf("GET /ac/toggle?") >= 0) {
+    int chPos = request.indexOf("ch=") + 3;
+    int chEnd = request.indexOf(" ", chPos);
+    int ch = request.substring(chPos, chEnd).toInt();
+    bool sent = false;
+    if (ch >= 0 && ch <= 3) {
+      logoSendPulse(ch);
+      sent = true;
+    }
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"sent\":"); client.print(sent ? "true" : "false");
+    client.print(",\"ch\":"); client.print(ch); client.println("}");
+    client.stop(); return;
+  }
+
+  // ===== AC STATUS =====
+  if (request.indexOf("GET /ac/status") >= 0) {
+    readACFeedback();
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"ac\":[");
+    for (int i = 0; i < 4; i++) {
+      client.print((acSnapshot >> i) & 1);
+      if (i < 3) client.print(",");
+    }
+    client.println("]}");
+    client.stop(); return;
+  }
 
   // ===== API SET =====
   if (request.indexOf("GET /set?") >= 0) {
@@ -254,15 +294,59 @@ void handleWebRequest(EthernetClient client) {
     client.stop(); return;
   }
 
-  /* ===== WEB UI MODBUS TCP (placeholder) ===== */
+  /* ===== WEB UI MODBUS — AC CONTROL ===== */
   if (request.startsWith("GET /modbus ")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.info{max-width:480px;margin:40px auto;background:#1a1a1a;border:1px solid #444;border-radius:12px;padding:24px;}.badge{display:inline-block;background:#553300;color:#ffaa55;border-radius:6px;padding:4px 10px;font-size:12px;margin-bottom:12px;}.desc{color:#aaa;font-size:14px;line-height:1.6;}</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>⚙️ MODBUS TCP CONTROL</h2></div>");
-    client.println("<div class='info'><span class='badge'>ĐANG PHÁT TRIỂN</span>");
-    client.println("<p class='desc'>Trang điều khiển thiết bị qua Modbus TCP trực tiếp.<br><br>Chưa hoạt động, sẽ hoàn thiện trong phiên bản tiếp theo.</p></div>");
-    client.println("</body></html>");
+    client.println("<style>");
+    client.println("body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:0;}");
+    client.println(".top{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a1a;border-bottom:1px solid #333;flex-wrap:wrap;}");
+    client.println(".back{padding:7px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;font-size:14px;}");
+    client.println(".back:hover{background:#444;}");
+    client.println("h2{margin:0;font-size:16px;flex:1;}");
+    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;max-width:600px;margin:30px auto;padding:0 16px;}");
+    client.println(".ac-btn{position:relative;height:90px;border-radius:14px;border:2px solid #444;background:#222;color:#fff;font-size:14px;font-weight:bold;cursor:pointer;transition:0.15s;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;}");
+    client.println(".ac-btn .icon{font-size:26px;}");
+    client.println(".ac-btn.on{background:#0a4a7a;border-color:#1a8fd1;color:#7dd3fc;}");
+    client.println(".ac-btn.on .icon{color:#7dd3fc;}");
+    client.println(".ac-btn.cooling{opacity:0.5;pointer-events:none;}");
+    client.println(".ac-btn:active{transform:scale(0.96);}");
+    client.println(".dot{width:8px;height:8px;border-radius:50%;background:#555;margin-top:2px;}");
+    client.println(".on .dot{background:#1a8fd1;}");
+    client.println("#status-bar{font-size:11px;opacity:0.45;margin-top:10px;}");
+    client.println("</style></head><body>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>❄️ ĐIỀU HOÀ (LOGO! 8)</h2></div>");
+    client.println("<div class='grid'>");
+    const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='ac-btn' id='ac"); client.print(i); client.print("' onclick='toggle("); client.print(i); client.println(")'>");
+      client.println("<span class='icon'>❄️</span>");
+      client.print("<span>"); client.print(acNames[i]); client.println("</span>");
+      client.println("<div class='dot'></div></button>");
+    }
+    client.println("</div><div id='status-bar'>Đang tải...</div>");
+    client.println("<script>");
+    client.println("const COOLDOWN=1600;let lastToggle=[-Infinity,-Infinity,-Infinity,-Infinity];");
+    client.println("function toggle(ch){");
+    client.println("  let now=Date.now();");
+    client.println("  if(now-lastToggle[ch]<COOLDOWN)return;");
+    client.println("  lastToggle[ch]=now;");
+    client.println("  let btn=document.getElementById('ac'+ch);");
+    client.println("  btn.classList.add('cooling');");
+    client.println("  fetch('/ac/toggle?ch='+ch).then(()=>setTimeout(poll,700)).catch(()=>setTimeout(poll,1000));");
+    client.println("  setTimeout(()=>btn.classList.remove('cooling'),COOLDOWN);");
+    client.println("}");
+    client.println("function poll(){");
+    client.println("  fetch('/ac/status').then(r=>r.json()).then(d=>{");
+    client.println("    d.ac.forEach((v,i)=>{");
+    client.println("      let b=document.getElementById('ac'+i);");
+    client.println("      if(v)b.classList.add('on');else b.classList.remove('on');");
+    client.println("    });");
+    client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
+    client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối LOGO!';});");
+    client.println("}");
+    client.println("setInterval(poll,2000);poll();");
+    client.println("</script></body></html>");
     client.stop(); return;
   }
 
