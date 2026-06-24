@@ -25,8 +25,8 @@ const int megaPort = 9000;
 #define MEGA_TIMEOUT_MS 300
 
 /* ===== AMX CONFIG ===== */
-const char* amxIoIP    = "192.168.1.181";  // CE-IO4  — cập nhật IP thực tế
-const char* amxRelayIP = "192.168.1.182";  // CE-REL8 — cập nhật IP thực tế
+const char* amxIoIP    = "192.168.1.203";  // CE-IO4
+const char* amxRelayIP = "192.168.1.204";  // CE-REL8
 const int   amxPort    = 44197;
 #define AMX_TRANSACT_TIMEOUT_MS 400
 #define AMX_MIRROR_BLOCK_MS     400
