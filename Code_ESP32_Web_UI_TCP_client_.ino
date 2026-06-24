@@ -179,7 +179,7 @@ bool amxMultiQuery(const char* deviceIP, const String* cmds, int numCmds,
   while (got < maxLines && millis() - t0 < AMX_TRANSACT_TIMEOUT_MS) {
     while (c.available()) {
       char ch = c.read();
-      if (ch == '\n') { if (line.length()) { onLine(line); got++; } line = ""; }
+      if (ch == '\n') { if (line.length()) { Serial.print("AMX RAW: ["); Serial.print(line); Serial.println("]"); onLine(line); got++; } line = ""; }
       else if (ch != '\r') line += ch;
     }
     yield();
