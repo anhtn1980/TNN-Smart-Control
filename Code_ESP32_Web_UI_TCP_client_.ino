@@ -234,8 +234,11 @@ void amxSetRelay(int ch, bool val) {
 // Khởi tạo CE-IO4: set inputMode DIGITAL cho 4 port (chạy 1 lần khi setup).
 void amxIoInit() {
   String cmds[4];
-  for (int i = 0; i < 4; i++) cmds[i] = "set /io/" + String(i+1) + "/inputMode DIGITAL";
-  amxMultiQuery(amxIoIP, cmds, 4, _parseAmxIoLine, 0);
+  // Gửi mode INPUT + inputMode DIGITAL cho 4 port, đọc response để debug
+  String cmds2[8];
+  for (int i = 0; i < 4; i++) cmds2[i]   = "set /io/" + String(i+1) + "/mode INPUT";
+  for (int i = 0; i < 4; i++) cmds2[4+i] = "set /io/" + String(i+1) + "/inputMode DIGITAL";
+  amxMultiQuery(amxIoIP, cmds2, 8, _parseAmxIoLine, 8);
   Serial.println("AMX IO init done");
 }
 
