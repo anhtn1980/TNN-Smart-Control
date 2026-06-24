@@ -193,9 +193,9 @@ bool amxMultiQuery(const char* deviceIP, const String* cmds, int numCmds,
 }
 
 void _parseAmxIoLine(const String& line) {
-  // "update io/N/digitalInput true|false"
-  if (!line.startsWith("update io/")) return;
-  int n = line.charAt(10) - '1';  // '1'→0 .. '4'→3
+  // "update /io/N/digitalInput true|false"
+  if (!line.startsWith("update /io/")) return;
+  int n = line.charAt(11) - '1';  // '1'→0 .. '4'→3
   if (n < 0 || n > 3) return;
   bool newVal = line.endsWith("true");
   if (bitRead(amxInputSnapshot, n) != newVal) {
@@ -236,7 +236,7 @@ void amxSetRelay(int ch, bool val) {
 }
 
 // Kết nối persistent tới CE-IO4, Subscribe 4 IO inputs.
-// CE-IO4 sẽ gửi trạng thái hiện tại ngay khi Subscribe, rồi push mỗi khi thay đổi.
+// CE-IO4 push: "update /io/N/digitalInput true|false" mỗi khi thay đổi.
 bool amxIoConnect() {
   amxIoClient.stop();
   if (!amxIoClient.connect(amxIoIP, amxPort)) return false;
