@@ -53,11 +53,15 @@ uint8_t acSnapshot = 0;
 uint8_t amxRelaySnapshot = 0;  // bits 0-3: relay 1-4
 uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
 
-// Reconcile: khi IO thay đổi, đợi AMX_RECONCILE_DELAY_MS rồi đọc relay thật
-// và set lại nếu chưa khớp. Kramer phản hồi trước trong khoảng delay đó.
-// Cả Kramer và ESP32 đều SET đến cùng trạng thái → không xung đột.
+// Toggle: mỗi lần công tắc tường đổi trạng thái (bất kể chiều) → toggle relay tương ứng.
+// Delay 500ms nhường Kramer phản hồi trước — nếu Kramer đã toggle thì relay đã đúng,
+// ESP32 toggle thêm lần nữa sẽ sai → đọc relay thật trước khi toggle để tránh.
+// Sau delay, đọc relay thật: nếu trạng thái relay chưa thay đổi so với trước khi IO đổi
+// → Kramer chưa phản hồi → ESP32 toggle. Nếu relay đã thay đổi → Kramer đã xử lý → bỏ qua.
 bool          amxNeedsReconcile = false;
 unsigned long amxReconcileAfter = 0;
+uint8_t       amxPendingToggle  = 0;   // bit N=1: kênh N+1 cần toggle relay
+uint8_t       amxRelayBeforeIO  = 0;   // snapshot relay tại thời điểm IO vừa thay đổi
 #define AMX_RECONCILE_DELAY_MS 500
 
 // IO polling interval
@@ -197,6 +201,8 @@ void _parseAmxIoLine(const String& line) {
   Serial.print("AMX IO RX: ["); Serial.print(line); Serial.println("]");
   if (bitRead(amxInputSnapshot, n) != newVal) {
     bitWrite(amxInputSnapshot, n, newVal);
+    bitWrite(amxPendingToggle, n, true);   // đánh dấu kênh này cần toggle
+    amxRelayBeforeIO = amxRelaySnapshot;   // ghi nhớ trạng thái relay lúc này
     amxNeedsReconcile = true;
     amxReconcileAfter = millis() + AMX_RECONCILE_DELAY_MS;
   }
@@ -242,20 +248,21 @@ void amxIoInit() {
   Serial.println("AMX IO init done");
 }
 
-// Đọc relay thật từ CE-REL8, so sánh với IO state, set nơi không khớp.
-// Chạy sau AMX_RECONCILE_DELAY_MS kể từ khi IO thay đổi.
-// Kramer thường phản hồi < 200ms → delay 500ms đủ để nhường Kramer làm trước.
-// Nếu Kramer đã set đúng → relay khớp IO → ESP32 không làm gì → 0 xung đột.
-// Nếu Kramer chưa set (giai đoạn 2) → ESP32 set → đèn phản hồi.
+// Toggle relay khi công tắc tường thay đổi — chạy sau AMX_RECONCILE_DELAY_MS.
+// Đọc relay thật trước: nếu relay đã thay đổi so với lúc IO đổi → Kramer đã xử lý → bỏ qua.
+// Nếu relay chưa thay đổi → Kramer chưa phản hồi → ESP32 toggle.
 void amxReconcile() {
-  amxReadRelays();  // đọc trạng thái thật từ CE-REL8
+  amxReadRelays();  // cập nhật amxRelaySnapshot
   for (int i = 0; i < 4; i++) {
-    bool want = bitRead(amxInputSnapshot, i);   // IO switch state
-    bool have = bitRead(amxRelaySnapshot, i);   // relay state thật
-    if (want != have) {
-      amxSetRelay(i + 1, want);
-      delay(30);
+    if (!bitRead(amxPendingToggle, i)) continue;
+    bitWrite(amxPendingToggle, i, false);
+    bool before = bitRead(amxRelayBeforeIO, i);
+    bool now    = bitRead(amxRelaySnapshot, i);
+    if (now == before) {
+      // Relay chưa thay đổi → Kramer chưa toggle → ESP32 toggle
+      amxSetRelay(i + 1, !now);
     }
+    // Nếu now != before → Kramer đã toggle rồi → không làm gì
   }
 }
 
