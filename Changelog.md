@@ -41,11 +41,27 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [2.0.0] - 2026-06-24
+Thay doi kien truc: bo megaClient persistent, dung connect-per-transaction cho MEGA (giong LOGO!). Giai quyet dut diem van de RECONNECTED OK loop. Chi tiet trong file.
+
+
+
+### [1.9.0] - 2026-06-23
+Cấu trúc lại giao diện web 4 trang: menu 4 nút (Đèn MEGA / Điều hòa LOGO! / AMX / Modbus TCP), /mega chỉ 16 relay (xóa AC section), /logo iframe LOGO!, /modbus placeholder, /amx giữ nguyên. Đơn giản hóa /cmd và /status.
+
+
 ### [1.8.4] - 2026-06-23
 Sửa lỗi FC5 write không tới LOGO! dù Serial in "LOGO! FC5 ON" như thường.
 - `logoTransact()`: thêm `c.flush()` ngay sau `c.write()` — bắt buộc với thư viện Ethernet/W5500 trên ESP32 để ép buffer TCP gửi ngay lập tức. Không có `flush()`, dữ liệu nằm trong TX buffer của W5500 và không được truyền cho đến khi kết nối đóng; khi đó LOGO! đã không còn socket để gửi lệnh.
 - `logoFC5()`: đổi `expectedLen` từ `12` (chờ echo) → `0` (gửi xong đóng ngay, không chờ). Modbus write không cần xác nhận từ client, LOGO! xử lý lệnh ngay khi nhận frame. Tránh 200ms timeout không cần thiết mỗi lần bấm nút.
 - `logoFC5()`: thêm log `sent` / `FAIL` để phân biệt kết nối thành công hay thất bại.
+
+### [1.8.4] - 2026-06-23
+Thêm giao diện webview nhúng trang điều khiển LOGO! Siemens (192.168.1.6) vào hệ thống:
+- Menu chính (`/`): thêm nút "🌡 Điều khiển điều hòa (LOGO!)" trỏ tới `/logo`.
+- Route `/logo` mới: trang fullscreen với thanh header (nút ⬅ Menu + tiêu đề + nút mở tab mới), bên dưới là `iframe` nhúng `http://192.168.1.6/webroot/main.htm`. Người dùng tương tác trực tiếp với giao diện LOGO! Web Editor mà không cần rời khỏi hệ thống ESP32.
+- Fallback tự động: nếu LOGO! chặn iframe sau 3 giây (X-Frame-Options), trang ẩn iframe và hiển thị nút "Mở giao diện LOGO!" để mở tab mới thay thế.
+- Nút "↗ Mở mới" luôn có sẵn trên header để mở LOGO! trong tab riêng (tiện hơn khi cần dùng song song).
 
 ### [1.8.3] - 2026-06-23
 Sửa địa chỉ Modbus điều khiển sai. v1.8.x trước đó ghi vào M1-M4 (Coil 8257+) — đây là biến nội bộ của LOGO! Web UI, không phải đường API bên ngoài. Tài liệu hệ thống mô tả rõ 2 đường điều khiển riêng: M1-M4 cho LOGO! Web UI, và **V0.4-V0.7 (Coil 5-8)** cho Kramer/API bên ngoài. Kramer đang dùng đường này và đã được xác nhận hoạt động (Write Coil 5 ON → delay → OFF để kích AC1).
