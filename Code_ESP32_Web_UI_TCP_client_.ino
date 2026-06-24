@@ -380,7 +380,11 @@ void handleWebRequest(EthernetClient client) {
   if (request.indexOf("GET /amx/mirror?") >= 0) {
     int vPos = request.indexOf("enable=") + 7;
     int vEnd = request.indexOf(" ", vPos);
+    bool wasEnabled = amxMirrorEnabled;
     amxMirrorEnabled = (request.substring(vPos, vEnd) == "true");
+    // Seed baseline khi vừa bật mirror: tránh poll đầu tiên coi toàn bộ
+    // input đang HIGH là "thay đổi mới" và toggle relay sai.
+    if (amxMirrorEnabled && !wasEnabled) amxLastInputs = amxInputSnapshot;
     client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
     client.print("{\"mirrorEnabled\":"); client.print(amxMirrorEnabled?"true":"false"); client.println("}");
     client.stop(); return;
@@ -501,7 +505,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("    d.relay.forEach((v,i)=>{let b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingRelay[i+1]=!!v;}});");
     client.println("    d.io.forEach((v,i)=>{let el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});");
     client.println("    let ms=document.getElementById('mirror-status'),mb=document.getElementById('mirror-btn');");
-    client.println("    if(d.mirrorEnabled){ms.innerText='✅ Mirror BẬT — ESP32 tự điều khiển relay theo công tắc tường';ms.style.color='#86efac';mb.innerText='Tắt Mirror';mb.style.background='#4a1a1a';}");
+    client.println("    _mirror=!!d.mirrorEnabled;");
+    client.println("    if(_mirror){ms.innerText='✅ Mirror BẬT — ESP32 tự điều khiển relay theo công tắc tường';ms.style.color='#86efac';mb.innerText='Tắt Mirror';mb.style.background='#4a1a1a';}");
     client.println("    else{ms.innerText='⏸ Mirror TẮT — Kramer đang quản lý công tắc tường';ms.style.color='#888';mb.innerText='Bật Mirror';mb.style.background='#1a3a1a';}");
     client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
     client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối AMX';});");
