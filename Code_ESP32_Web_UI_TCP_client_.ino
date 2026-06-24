@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.3.0"
+#define FW_VERSION "2.4.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -56,9 +56,15 @@ uint8_t amxRelaySnapshot = 0;  // bits 0-3: relay 1-4
 uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
 uint8_t amxLastInputs    = 0;
 unsigned long amxMirrorBlockUntil = 0;
-// Giai đoạn 1 (Kramer còn chạy): false — ESP32 không mirror công tắc tường
-// Giai đoạn 2 (tiếp quản từ Kramer): true — ESP32 tự mirror IO→relay
 bool amxMirrorEnabled = false;
+
+// Persistent connection tới CE-IO4 — Subscribe push notifications
+// CE-IO4 chỉ push khi có thay đổi, không trả response ngay trên connection mới.
+// Giữ 1 socket lâu dài, đọc non-blocking trong loop().
+EthernetClient amxIoClient;
+static String  amxIoLine = "";           // buffer dòng đang đọc dở
+unsigned long  amxIoLastReconnect = 0;
+#define AMX_IO_RECONNECT_MS 8000         // retry mỗi 8s nếu mất kết nối
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -219,6 +225,33 @@ void amxSetRelay(int ch, bool val) {
   String cmds[1] = {cmd};
   amxMultiQuery(amxRelayIP, cmds, 1, _parseAmxRelayLine, 1);
   bitWrite(amxRelaySnapshot, ch-1, val);  // optimistic update
+}
+
+// Kết nối persistent tới CE-IO4, Subscribe 4 IO inputs.
+// CE-IO4 sẽ gửi trạng thái hiện tại ngay khi Subscribe, rồi push mỗi khi thay đổi.
+bool amxIoConnect() {
+  amxIoClient.stop();
+  if (!amxIoClient.connect(amxIoIP, amxPort)) return false;
+  for (int i = 1; i <= 4; i++) {
+    amxIoClient.print(String("Subscribe /io/") + i + "/digitalInput\n");
+  }
+  amxIoLine = "";
+  Serial.println("AMX IO connected & subscribed");
+  return true;
+}
+
+// Đọc push data từ CE-IO4 — hoàn toàn non-blocking, gọi mỗi vòng loop().
+void amxIoPoll() {
+  while (amxIoClient.available()) {
+    char ch = amxIoClient.read();
+    if (ch == '\n') {
+      amxIoLine.trim();
+      if (amxIoLine.length()) _parseAmxIoLine(amxIoLine);
+      amxIoLine = "";
+    } else if (ch != '\r') {
+      amxIoLine += ch;
+    }
+  }
 }
 
 void amxMirrorInputs() {
@@ -411,7 +444,8 @@ void handleWebRequest(EthernetClient client) {
   // ===== AMX STATUS =====
   if (request.indexOf("GET /amx/status") >= 0) {
     amxReadRelays();
-    amxReadInputs();
+    // amxInputSnapshot được cập nhật liên tục qua persistent connection + amxIoPoll()
+    // không cần gọi amxReadInputs() TCP ở đây
     client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
     client.print("{\"relay\":[");
     for (int i = 0; i < 4; i++) { client.print((amxRelaySnapshot>>i)&1); if(i<3) client.print(","); }
@@ -690,6 +724,9 @@ void setup() {
 
   // Đọc trạng thái ban đầu từ MEGA
   megaTransact("get /relay/all");
+
+  // Kết nối persistent tới CE-IO4 (non-blocking nếu không phản hồi)
+  amxIoConnect();
 }
 
 /* ===== LOOP ===== */
@@ -711,13 +748,14 @@ void loop() {
     megaTransact("get /relay/all");
   }
 
-  // AMX IO polling — chỉ chạy khi mirror BẬT (giai đoạn 2, Kramer đã ngừng).
-  // Khi mirror TẮT: IO status vẫn được đọc on-demand qua /amx/status mỗi
-  // khi browser poll — không cần loop chủ động. Tránh block loop() 400ms
-  // mỗi 500ms khi AMX device chưa kết nối thật.
-  static unsigned long lastAmxPoll = 0;
-  if (amxMirrorEnabled && millis() - lastAmxPoll >= AMX_IO_POLL_MS) {
-    lastAmxPoll = millis();
-    if (amxReadInputs()) amxMirrorInputs();
+  // AMX CE-IO4 — persistent connection, non-blocking
+  // Luôn duy trì kết nối để IO indicators trên UI cập nhật thật.
+  // amxIoPoll() chỉ đọc bytes đang sẵn sàng — không bao giờ block.
+  if (amxIoClient.connected()) {
+    amxIoPoll();
+    if (amxMirrorEnabled) amxMirrorInputs();
+  } else if (millis() - amxIoLastReconnect >= AMX_IO_RECONNECT_MS) {
+    amxIoLastReconnect = millis();
+    amxIoConnect();
   }
 }
