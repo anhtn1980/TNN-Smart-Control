@@ -254,7 +254,10 @@ void amxIoPoll() {
     char ch = amxIoClient.read();
     if (ch == '\n') {
       amxIoLine.trim();
-      if (amxIoLine.length()) _parseAmxIoLine(amxIoLine);
+      if (amxIoLine.length()) {
+        Serial.print("AMX IO RX: ["); Serial.print(amxIoLine); Serial.println("]");
+        _parseAmxIoLine(amxIoLine);
+      }
       amxIoLine = "";
     } else if (ch != '\r') {
       amxIoLine += ch;
