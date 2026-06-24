@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.2.0"
+#define FW_VERSION "2.3.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -56,6 +56,9 @@ uint8_t amxRelaySnapshot = 0;  // bits 0-3: relay 1-4
 uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
 uint8_t amxLastInputs    = 0;
 unsigned long amxMirrorBlockUntil = 0;
+// Giai đoạn 1 (Kramer còn chạy): false — ESP32 không mirror công tắc tường
+// Giai đoạn 2 (tiếp quản từ Kramer): true — ESP32 tự mirror IO→relay
+bool amxMirrorEnabled = false;
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -306,11 +309,14 @@ void handleWebRequest(EthernetClient client) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
     client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}h2{margin-top:10px}.menu{max-width:500px;margin:30px auto;display:grid;gap:14px;}a{display:block;padding:18px;border-radius:12px;background:#333;color:#fff;text-decoration:none;font-size:18px;border:1px solid #555;}a:hover{background:#444;}</style></head><body>");
-    client.println("<h2>TNN SI - SMART CONTROL</h2><p>Chọn nhóm thiết bị cần điều khiển:</p>");
+    client.println("<h2>TNN SI - SMART CONTROL</h2>");
+    client.print("<p style='opacity:.5;font-size:12px;margin:4px 0 16px'>ESP32 v"); client.print(FW_VERSION); client.println(" &nbsp;|&nbsp; 192.168.1.180</p>");
+    client.println("<p>Chọn nhóm thiết bị cần điều khiển:</p>");
     client.println("<div class='menu'>");
     client.println("<a href='/mega'>🔌 Điều khiển Đèn (MEGA)</a>");
     client.println("<a href='/modbus'>❄️ Điều khiển Điều hòa (LOGO!)</a>");
     client.println("<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>");
+    client.println("<a href='/kios' style='background:#1a3a1a;border-color:#2a5a2a;'>🖥️ Truy cập trang KIOS</a>");
     client.println("</div></body></html>");
     client.stop(); return;
   }
@@ -320,16 +326,34 @@ void handleWebRequest(EthernetClient client) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
     client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;}");
-    client.println(".top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}");
-    client.println(".back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}");
-    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;}");
+    client.println(".top{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #333;flex-wrap:wrap;}");
+    client.println(".back{padding:7px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;font-size:13px;}");
+    client.println(".back:hover{background:#444;} .top h2{margin:0;font-size:15px;flex:1;}");
+    client.println(".info-btn{padding:6px 10px;border-radius:7px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:13px;}");
+    client.println(".info-btn:hover{background:#333;color:#fff;}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:14px 16px;font-size:12px;line-height:1.7;color:#bbb;}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 6px;font-size:13px;} .info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 5px;border-radius:4px;}");
+    client.println(".info-panel .cfg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:8px;}");
+    client.println(".cfg .k{color:#888;} .cfg .v{color:#7dd3fc;font-family:monospace;}");
+    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;padding:10px;}");
     client.println("button{height:60px;font-size:12px;border-radius:10px;border:none;background:#444;color:#fff;transition:0.1s;cursor:pointer;}");
     client.println("button:active{transform:scale(0.95);background:#666;}");
     client.println("button.pressing{transform:scale(0.95);background:#888;}");
-    client.println(".on{background:green;color:#fff;}");
-    client.println("button.on{background:green;}");
+    client.println(".on{background:green;color:#fff;} button.on{background:green;}");
     client.println("</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>TNN SI - MEGA CONTROL</h2></div>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🔌 MEGA CONTROL</h2>");
+    client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
+    client.println("<div class='info-panel' id='infop'>");
+    client.println("<h4>Kiến trúc</h4>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → TCP :9000 → <code>MEGA 192.168.1.178</code> → RS485 9600 → <b>Board relay 16 kênh</b><br>");
+    client.println("ESP32 dùng <b>connect-per-transaction</b>: mỗi lệnh mở TCP mới, gửi, đọc response, đóng. Không giữ persistent connection.<br>");
+    client.println("Công tắc tường nối vào input vật lý của board relay, MEGA mirror thay đổi input → toggle relay tương ứng.");
+    client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
+    client.println("<span class='k'>MEGA IP</span><span class='v'>192.168.1.178:9000</span>");
+    client.println("<span class='k'>Poll status</span><span class='v'>mỗi 3s (ESP32 → MEGA get /relay/all)</span>");
+    client.println("<span class='k'>Timeout</span><span class='v'>300ms</span>");
+    client.println("</div></div>");
+    client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
     client.println("<h4>RELAY CONTROL (1-16)</h4><div class='grid'>");
     const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
     for (int i = 1; i <= 16; i++) {
@@ -349,6 +373,16 @@ void handleWebRequest(EthernetClient client) {
     client.println("function poll(){fetch('/status').then(r=>r.text()).then(t=>applyStatus(t));}");
     client.println("setInterval(poll,2000);poll();");
     client.println("</script></body></html>");
+    client.stop(); return;
+  }
+
+  // ===== AMX MIRROR TOGGLE =====
+  if (request.indexOf("GET /amx/mirror?") >= 0) {
+    int vPos = request.indexOf("enable=") + 7;
+    int vEnd = request.indexOf(" ", vPos);
+    amxMirrorEnabled = (request.substring(vPos, vEnd) == "true");
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"mirrorEnabled\":"); client.print(amxMirrorEnabled?"true":"false"); client.println("}");
     client.stop(); return;
   }
 
@@ -379,7 +413,8 @@ void handleWebRequest(EthernetClient client) {
     for (int i = 0; i < 4; i++) { client.print((amxRelaySnapshot>>i)&1); if(i<3) client.print(","); }
     client.print("],\"io\":[");
     for (int i = 0; i < 4; i++) { client.print((amxInputSnapshot>>i)&1); if(i<3) client.print(","); }
-    client.println("]}");
+    client.print("],\"mirrorEnabled\":"); client.print(amxMirrorEnabled?"true":"false");
+    client.println("}");
     client.stop(); return;
   }
 
@@ -405,8 +440,33 @@ void handleWebRequest(EthernetClient client) {
     client.println(".io-indicator.active .io-dot{background:#55aaff;}");
     client.println("#status-bar{font-size:11px;opacity:0.4;margin:12px 0;}");
     client.println("</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🧩 AMX CONTROL</h2></div>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🧩 AMX CONTROL</h2>");
+    client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
+    client.println("<div class='info-panel' id='infop'>");
+    client.println("<h4>Kiến trúc</h4>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → TCP :44197 → <code>CE-IO4 192.168.1.203</code> (4 công tắc tường)<br>");
+    client.println("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ TCP :44197 → <code>CE-REL8 192.168.1.204</code> (4 relay đèn)<br>");
+    client.println("<b>Giai đoạn 1</b> (hiện tại, Kramer còn chạy): Mirror công tắc tường <b>TẮT</b> — Kramer đảm nhiệm logic.<br>");
+    client.println("<b>Giai đoạn 2</b> (sau khi Kramer ngừng): Bật Mirror — ESP32 tự mirror IO→relay.<br>");
+    client.println("Giao thức: text TCP, suffix \\n. Subscribe /io/N/digitalInput → update io/N/digitalInput true/false.");
+    client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
+    client.println("<span class='k'>CE-IO4 IP</span><span class='v'>192.168.1.203:44197</span>");
+    client.println("<span class='k'>CE-REL8 IP</span><span class='v'>192.168.1.204:44197</span>");
+    client.println("<span class='k'>IO Poll</span><span class='v'>500ms</span>");
+    client.println("<span class='k'>Mirror block</span><span class='v'>400ms sau lệnh web</span>");
+    client.println("</div>");
+    client.println("<div style='margin-top:10px;padding:8px;background:#1a1a00;border-radius:6px;border:1px solid #554400;font-size:11px;color:#ffcc66;'>");
+    client.println("⚠️ Chưa xác nhận Subscribe hoạt động one-shot trên connection mới.<br>Nếu mirror không phản hồi sau giai đoạn 2: cần chuyển sang persistent connection (liên hệ kỹ thuật).");
+    client.println("</div></div>");
+    client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
 
+    // Mirror control
+    client.println("<div class='section' style='margin-top:16px'>");
+    client.println("<div class='section-title'>Chế độ Mirror công tắc tường → relay</div>");
+    client.println("<div style='display:flex;align-items:center;gap:10px;background:#1a1a1a;border-radius:10px;padding:10px 14px;border:1px solid #333;'>");
+    client.println("<span id='mirror-status' style='flex:1;font-size:13px;color:#888;'>Đang tải...</span>");
+    client.println("<button id='mirror-btn' onclick='toggleMirror()' style='padding:7px 16px;border-radius:8px;border:none;background:#333;color:#fff;cursor:pointer;font-size:13px;'>...</button>");
+    client.println("</div></div>");
     // Relay section
     client.println("<div class='section'><div class='section-title'>CE-REL8 — Điều khiển đèn (Relay 1-4)</div><div class='grid'>");
     const char* amxRelayNames[] = {"Đèn 1","Đèn 2","Đèn 3","Đèn 4"};
@@ -440,9 +500,13 @@ void handleWebRequest(EthernetClient client) {
     client.println("  fetch('/amx/status').then(r=>r.json()).then(d=>{");
     client.println("    d.relay.forEach((v,i)=>{let b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingRelay[i+1]=!!v;}});");
     client.println("    d.io.forEach((v,i)=>{let el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});");
+    client.println("    let ms=document.getElementById('mirror-status'),mb=document.getElementById('mirror-btn');");
+    client.println("    if(d.mirrorEnabled){ms.innerText='✅ Mirror BẬT — ESP32 tự điều khiển relay theo công tắc tường';ms.style.color='#86efac';mb.innerText='Tắt Mirror';mb.style.background='#4a1a1a';}");
+    client.println("    else{ms.innerText='⏸ Mirror TẮT — Kramer đang quản lý công tắc tường';ms.style.color='#888';mb.innerText='Bật Mirror';mb.style.background='#1a3a1a';}");
     client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
     client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối AMX';});");
     client.println("}");
+    client.println("let _mirror=false;function toggleMirror(){_mirror=!_mirror;fetch('/amx/mirror?enable='+_mirror).then(()=>poll());}");
     client.println("setInterval(poll,2000);poll();");
     client.println("</script></body></html>");
     client.stop(); return;
@@ -469,7 +533,26 @@ void handleWebRequest(EthernetClient client) {
     client.println(".on .dot{background:#1a8fd1;}");
     client.println("#status-bar{font-size:11px;opacity:0.45;margin-top:10px;}");
     client.println("</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>❄️ ĐIỀU HOÀ (LOGO! 8)</h2></div>");
+    client.println("<style>.info-btn{padding:6px 10px;border-radius:7px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:13px;}.info-btn:hover{background:#333;color:#fff;}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:14px 16px;font-size:12px;line-height:1.7;color:#bbb;}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 6px;font-size:13px;} .info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 5px;border-radius:4px;}");
+    client.println(".info-panel .cfg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:8px;} .cfg .k{color:#888;} .cfg .v{color:#7dd3fc;font-family:monospace;}</style>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>❄️ ĐIỀU HOÀ (LOGO! 8)</h2>");
+    client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
+    client.println("<div class='info-panel' id='infop'>");
+    client.println("<h4>Kiến trúc</h4>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4 → Nút ĐH 1-4<br>");
+    client.println("Điều khiển bằng <b>pulse pattern</b>: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. LOGO! phát hiện cạnh lên → B001-B004 tạo xung 1s → relay nhả → giả lập nhấn nút ĐH.<br>");
+    client.println("Feedback thật: đọc Coil V0.0-V0.3 (FC1, addr 0-3) — LED bảng ĐH → I1-I4 → M21-M24 → NQ1-NQ4 → VM V0.0-V0.3.");
+    client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
+    client.println("<span class='k'>LOGO! IP</span><span class='v'>192.168.1.6:504</span>");
+    client.println("<span class='k'>Điều khiển coil</span><span class='v'>V0.4-V0.7 (PDU addr 4-7, FC5)</span>");
+    client.println("<span class='k'>Feedback coil</span><span class='v'>V0.0-V0.3 (PDU addr 0-3, FC1)</span>");
+    client.println("<span class='k'>Pulse width</span><span class='v'>500ms ON → OFF</span>");
+    client.println("<span class='k'>Cooldown</span><span class='v'>1500ms / kênh</span>");
+    client.println("<span class='k'>Lưu ý</span><span class='v'>Kramer đang dùng 1/8 slot Modbus TCP của LOGO!</span>");
+    client.println("</div></div>");
+    client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
     client.println("<div class='grid'>");
     const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
     for (int i = 0; i < 4; i++) {
@@ -500,6 +583,51 @@ void handleWebRequest(EthernetClient client) {
     client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối LOGO!';});");
     client.println("}");
     client.println("setInterval(poll,2000);poll();");
+    client.println("</script></body></html>");
+    client.stop(); return;
+  }
+
+  /* ===== WEB UI KIOS ===== */
+  if (request.startsWith("GET /kios ")) {
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
+    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
+    client.println("<style>*{margin:0;padding:0;box-sizing:border-box;}body{display:flex;flex-direction:column;height:100vh;background:#111;font-family:Arial;}");
+    client.println(".top{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap;}");
+    client.println(".back{padding:6px 10px;border-radius:7px;background:#333;color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;}");
+    client.println(".back:hover{background:#444;} .title{color:#fff;font-size:14px;font-weight:bold;}");
+    client.println(".url-bar{display:flex;align-items:center;gap:6px;padding:7px 10px;background:#141414;border-bottom:1px solid #2a2a2a;flex-shrink:0;flex-wrap:wrap;}");
+    client.println("#url-input{flex:1;min-width:200px;padding:6px 10px;border-radius:7px;border:1px solid #444;background:#222;color:#fff;font-size:13px;}");
+    client.println(".btn{padding:6px 12px;border-radius:7px;color:#fff;border:none;cursor:pointer;font-size:13px;white-space:nowrap;}");
+    client.println(".btn-go{background:#225588;} .btn-go:hover{background:#2a66aa;}");
+    client.println(".btn-new{background:#333;} .btn-new:hover{background:#444;}");
+    client.println(".presets{display:flex;gap:6px;flex-wrap:wrap;padding:6px 10px;background:#111;border-bottom:1px solid #222;flex-shrink:0;}");
+    client.println(".preset{padding:4px 10px;border-radius:6px;border:1px solid #333;background:#1a1a1a;color:#aaa;font-size:11px;cursor:pointer;}");
+    client.println(".preset:hover{background:#2a2a2a;color:#fff;}");
+    client.println(".hint{background:#1a1a2a;border-bottom:1px solid #2a2a44;padding:6px 12px;font-size:11px;color:#7799cc;flex-shrink:0;}");
+    client.println("iframe{flex:1;width:100%;border:none;background:#fff;}</style></head><body>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><span class='title'>🖥️ Truy cập trang KIOS</span></div>");
+    client.println("<div class='url-bar'>");
+    client.println("<input id='url-input' type='text' placeholder='Nhập địa chỉ website (http://...)' />");
+    client.println("<button class='btn btn-go' onclick='goUrl()'>▶ Truy cập</button>");
+    client.println("<button class='btn btn-new' onclick='openNew()'>↗ Mở tab mới</button>");
+    client.println("<button class='btn' style='background:#2a2200;' onclick='reload()'>🔄 Tải lại</button></div>");
+    client.println("<div class='presets'>");
+    client.println("<span style='color:#555;font-size:11px;line-height:2;margin-right:4px;'>Nhanh:</span>");
+    client.println("<div class='preset' onclick='setUrl(\"http://192.168.1.6/webroot/main.htm\")'>LOGO! Web Editor</div>");
+    client.println("<div class='preset' onclick='setUrl(\"http://192.168.1.178\")'>MEGA (178)</div>");
+    client.println("<div class='preset' onclick='setUrl(\"http://192.168.1.180\")'>ESP32 Menu</div>");
+    client.println("</div>");
+    client.println("<div class='hint'>⚠️ Một số trang yêu cầu đăng nhập riêng: mở tab mới → đăng nhập → quay lại → nhấn 🔄 Tải lại &nbsp;|&nbsp; URL được lưu tự động trong trình duyệt</div>");
+    client.println("<iframe id='kf' src=''></iframe>");
+    client.println("<script>");
+    client.println("var inp=document.getElementById('url-input'),fr=document.getElementById('kf');");
+    client.println("var saved=localStorage.getItem('kios_url')||'';");
+    client.println("if(saved){inp.value=saved;fr.src=saved;}");
+    client.println("function goUrl(){var u=inp.value.trim();if(!u)return;if(!u.startsWith('http'))u='http://'+u;inp.value=u;fr.src=u;localStorage.setItem('kios_url',u);}");
+    client.println("function openNew(){var u=inp.value.trim();if(u)window.open(u,'_blank');}");
+    client.println("function reload(){fr.src=fr.src;}");
+    client.println("function setUrl(u){inp.value=u;goUrl();}");
+    client.println("inp.addEventListener('keydown',function(e){if(e.key==='Enter')goUrl();});");
     client.println("</script></body></html>");
     client.stop(); return;
   }
@@ -563,11 +691,12 @@ void loop() {
     megaTransact("get /relay/all");
   }
 
-  // AMX IO polling + mirror công tắc tường → relay
+  // AMX IO polling — luôn đọc để hiển thị trạng thái công tắc tường trên UI
+  // Mirror chỉ chạy khi amxMirrorEnabled = true (giai đoạn 2, sau khi Kramer ngừng)
   static unsigned long lastAmxPoll = 0;
   if (millis() - lastAmxPoll >= AMX_IO_POLL_MS) {
     lastAmxPoll = millis();
-    if (amxReadInputs()) {
+    if (amxReadInputs() && amxMirrorEnabled) {
       amxMirrorInputs();
     }
   }
