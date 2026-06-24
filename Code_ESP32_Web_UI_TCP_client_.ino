@@ -25,7 +25,7 @@ const int megaPort = 9000;
 #define MEGA_TIMEOUT_MS 300
 
 /* ===== AMX CONFIG ===== */
-const char* amxIoIP    = "192.168.1.203";  // CE-IO4
+const char* amxIoIP    = "192.168.1.7";    // CE-IO4
 const char* amxRelayIP = "192.168.1.204";  // CE-REL8
 const int   amxPort    = 44197;
 #define AMX_TRANSACT_TIMEOUT_MS 400
@@ -462,13 +462,13 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
     client.println("<div class='info-panel' id='infop'>");
     client.println("<h4>Kiến trúc</h4>");
-    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → TCP :44197 → <code>CE-IO4 192.168.1.203</code> (4 công tắc tường)<br>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → TCP :44197 → <code>CE-IO4 192.168.1.7</code> (4 công tắc tường)<br>");
     client.println("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ TCP :44197 → <code>CE-REL8 192.168.1.204</code> (4 relay đèn)<br>");
     client.println("Logic: IO thay đổi → đợi 500ms (nhường Kramer phản hồi trước) → đọc relay thật → SET nếu relay chưa khớp IO.<br>");
     client.println("Cả Kramer và ESP32 đều SET đến cùng trạng thái → không xung đột, hoạt động song song.<br>");
     client.println("Web button override vẫn hoạt động vì không tạo IO change event.");
     client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
-    client.println("<span class='k'>CE-IO4 IP</span><span class='v'>192.168.1.203:44197</span>");
+    client.println("<span class='k'>CE-IO4 IP</span><span class='v'>192.168.1.7:44197</span>");
     client.println("<span class='k'>CE-REL8 IP</span><span class='v'>192.168.1.204:44197</span>");
     client.println("<span class='k'>IO Poll</span><span class='v'>500ms</span>");
     client.println("<span class='k'>Mirror block</span><span class='v'>400ms sau lệnh web</span>");
