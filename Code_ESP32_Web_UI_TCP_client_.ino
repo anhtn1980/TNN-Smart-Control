@@ -62,10 +62,10 @@ bool          amxNeedsReconcile = false;
 unsigned long amxReconcileAfter = 0;
 uint8_t       amxPendingToggle  = 0;   // bit N=1: kênh N+1 cần toggle relay
 uint8_t       amxRelayBeforeIO  = 0;   // snapshot relay tại thời điểm IO vừa thay đổi
-#define AMX_RECONCILE_DELAY_MS 500
+#define AMX_RECONCILE_DELAY_MS 300
 
 // IO polling interval
-#define AMX_IO_POLL_INTERVAL_MS 800
+#define AMX_IO_POLL_INTERVAL_MS 400
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -245,6 +245,15 @@ void amxIoInit() {
   for (int i = 0; i < 4; i++) cmds2[i]   = "set /io/" + String(i+1) + "/mode INPUT";
   for (int i = 0; i < 4; i++) cmds2[4+i] = "set /io/" + String(i+1) + "/inputMode DIGITAL";
   amxMultiQuery(amxIoIP, cmds2, 8, _parseAmxIoLine, 8);
+
+  // Seed amxInputSnapshot với trạng thái thật hiện tại — không trigger toggle.
+  // Nếu không seed, lần poll đầu tiên sẽ thấy 0→true là "thay đổi" và toggle relay.
+  String gets[4];
+  for (int i = 0; i < 4; i++) gets[i] = "get /io/" + String(i+1) + "/digitalInput";
+  amxNeedsReconcile = false;  // tắt cờ trước khi seed
+  amxMultiQuery(amxIoIP, gets, 4, _parseAmxIoLine, 4);
+  amxNeedsReconcile = false;  // xóa cờ do _parseAmxIoLine có thể vừa set
+  amxPendingToggle  = 0;      // không toggle gì khi mới boot
   Serial.println("AMX IO init done");
 }
 
