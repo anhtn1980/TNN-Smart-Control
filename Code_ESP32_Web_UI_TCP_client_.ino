@@ -126,7 +126,7 @@ unsigned long  amxIoLastOk     = 0;      // lần cuối nhận được respons
 
 /* ===== NTP + SCHEDULER ===== */
 // NTP server — dùng IP router nội bộ nếu router có NTP relay, hoặc pool.ntp.org
-static const char NTP_SERVER[] = "192.168.1.1";
+static const char NTP_SERVER[] = "216.239.35.0";  // time.google.com (IP cố định)
 #define NTP_PORT          123
 #define TZ_OFFSET_SEC     25200   // UTC+7 (Việt Nam)
 #define NTP_RESYNC_MS     21600000UL  // re-sync mỗi 6 tiếng
