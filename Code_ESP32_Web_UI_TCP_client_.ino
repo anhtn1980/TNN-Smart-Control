@@ -680,7 +680,8 @@ void handleWebRequest(EthernetClient client) {
     client.println(".hint{background:#1a1a2a;border-bottom:1px solid #2a2a44;padding:6px 12px;font-size:11px;color:#7799cc;flex-shrink:0;display:none;}");
     client.println("iframe{flex:1;width:100%;border:none;background:#fff;}</style></head><body>");
     client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><span class='title'>🖥️ KIOS</span>");
-    client.println("<button class='btn' style='background:#2a2200;border:none;' onclick='reload()'>🔄</button></div>");
+    client.println("<button class='btn' style='background:#1a3a1a;border:1px solid #2a5a2a;margin-left:auto;' onclick='reloadFrame()'>🔄 Tải lại</button>");
+    client.println("<button class='btn' style='background:#3a1a1a;border:1px solid #5a2a2a;' onclick='window.location.reload()'>↺ Khởi động lại</button></div>");
     client.println("<div class='site-bar'>");
     client.println("<div class='site-btn' id='btn0' onclick='loadSite(0)'>KC-Brain</div>");
     client.println("<div class='site-btn' id='btn1' onclick='loadSite(1)'>SL-240C</div>");
@@ -707,9 +708,15 @@ void handleWebRequest(EthernetClient client) {
     client.println("function goCustom(){var u=inp.value.trim();if(!u)return;if(!u.startsWith('http'))u='http://'+u;");
     client.println("  inp.value=u;fr.src=u;localStorage.setItem('kios_custom',u);}");
     client.println("function openNew(){var u=fr.src||inp.value.trim();if(u)window.open(u,'_blank');}");
-    client.println("function reload(){if(fr.src)fr.src=fr.src;}");
+    client.println("function reloadFrame(){if(fr.src)fr.src=fr.src;}");
     client.println("inp.addEventListener('keydown',function(e){if(e.key==='Enter')goCustom();});");
-    client.println("loadSite(0);");  // mặc định mở KC-Brain
+    // Auto-reconnect: ping ESP32 mỗi 10 giây, nếu mất rồi có lại thì tự reload trang
+    client.println("var _lost=false;");
+    client.println("setInterval(function(){");
+    client.println("  fetch('/').then(function(){if(_lost){_lost=false;window.location.reload();}})");
+    client.println("  .catch(function(){_lost=true;});");
+    client.println("},10000);");
+    client.println("loadSite(0);");
     client.println("</script></body></html>");
     client.stop(); return;
   }
