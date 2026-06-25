@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.4"
+#define FW_VERSION "3.0.5"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -767,9 +767,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("</div>");  // setting-card
     // Password card — collapsed by default
     client.println("<div class='setting-card'>");
-    client.println("<div style='display:flex;align-items:center;justify-content:space-between;cursor:pointer' onclick='togglePass()'>"
-                   "<h3 style='margin:0'>🔑 Đổi mật khẩu</h3>"
-                   "<span id='pass-toggle' style='color:#64748b;font-size:12px'>▼ Mở</span></div>");
+    client.println("<h3>🔑 Đổi mật khẩu</h3>");
     client.println("<div id='pass-body' style='display:none;margin-top:12px'>");
     client.println("<div class='setting-row'><label>Mật khẩu hiện tại</label>"
                    "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
@@ -780,9 +778,9 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
     client.println("<div class='sched-status' id='pass-status'></div>");
     client.println("</div></div>");  // pass-body + password card
-    // Info card
+    // Info card — nhấn tiêu đề 5 lần liên tiếp để mở phần đổi mật khẩu
     client.println("<div class='setting-card'>");
-    client.println("<h3>ℹ️ Thông tin hệ thống</h3>");
+    client.println("<h3 onclick='infoTap()' style='cursor:default'>ℹ️ Thông tin hệ thống</h3>");
     client.println("<div style='font-size:13px;color:#aaa;line-height:2'>");
     client.print("<div>Firmware: <span style='color:#7dd3fc'>"); client.print(FW_VERSION); client.println("</span></div>");
     client.println("<div>IP: <span style='color:#7dd3fc'>192.168.1.180</span></div>");
@@ -876,7 +874,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("    else if(d.err==='wrong_pass')s.innerText='❌ Mật khẩu hiện tại không đúng';");
     client.println("    else s.innerText='❌ Lỗi: '+d.err;");
     client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
-    client.println("function togglePass(){var b=document.getElementById('pass-body'),t=document.getElementById('pass-toggle');var open=b.style.display==='block';b.style.display=open?'none':'block';t.innerText=open?'▼ Mở':'▲ Đóng';}");
+    client.println("var _itap=0,_itimer=0;");
+    client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=5){_itap=0;var b=document.getElementById('pass-body');b.style.display=b.style.display==='block'?'none':'block';}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
 
     // ── polling master ──
     client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
