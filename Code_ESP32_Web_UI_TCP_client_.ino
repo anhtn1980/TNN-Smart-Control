@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.7.0"
+#define FW_VERSION "2.7.1"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -41,12 +41,11 @@ const int   logoPort = 504;
 #define LOGO_MODBUS_TIMEOUT_MS 200
 
 /* ===== BASIC AUTH ===== */
-// Đổi username/password tại đây trước khi nạp firmware
-#define AUTH_USER "tnn"
+// Chỉ cần password — trình duyệt hiện 1 ô "Password", không hỏi username
+// Đổi AUTH_PASS và AUTH_B64 (= Base64 của ":password") trước khi nạp firmware
+// Tính lại: echo -n ":mat_khau_moi" | base64
 #define AUTH_PASS "tnn@2026"
-// Credential dạng Base64("tnn:tnn@2026") — tính lại nếu đổi user/pass
-// Dùng: https://www.base64encode.org/ hoặc echo -n "user:pass" | base64
-static const char AUTH_B64[] = "dG5uOnRubkAyMDI2";
+static const char AUTH_B64[] = "OnRubkAyMDI2";  // Base64(":tnn@2026")
 
 /* ===== SERVER ===== */
 EthernetServer server(80);
