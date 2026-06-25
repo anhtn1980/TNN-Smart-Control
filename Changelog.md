@@ -41,6 +41,53 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.0.1] - 2026-06-25
+Lưu settings vĩnh viễn vào flash NVS (Preferences).
+
+- `#include <Preferences.h>`: thư viện NVS có sẵn trong ESP32 Arduino framework.
+- `setup()`: đọc `sched_en`, `sched_h`, `sched_m` từ namespace `"tnn"` — áp dụng ngay khi boot. Lần đầu nạp firmware dùng default: bật, 18:00.
+- `POST /settings`: sau khi cập nhật RAM, ghi đồng thời xuống NVS → tồn tại qua reboot và mất điện.
+- Serial in `Settings loaded: sched=ON 18:00` khi boot để xác nhận.
+- NVS chịu ~100.000 lần ghi (đổi giờ mỗi ngày = 273 năm).
+
+### [3.0.0] - 2026-06-25
+Thêm đồng hồ thực trên nav bar, tab Cài đặt, `/info` endpoint, nút Thoát.
+
+- **Đồng hồ HH:MM:SS** trên nav bar — cập nhật mỗi giây qua `/info`, không tốn socket riêng.
+- **Tab ⚙️ Cài đặt**:
+  - Toggle bật/tắt scheduler.
+  - Input giờ:phút tắt tự động — lưu qua `POST /settings`, có hiệu lực ngay không cần recompile.
+  - Card thông tin hệ thống: firmware version, IP, NTP status, uptime.
+- **`GET /info`**: JSON `{fw, uptime, time, ntp, sched}` — debug từ xa không cần Serial Monitor.
+- **`GET /logout`**: xóa cookie `sid`, redirect về `/login`.
+- **`GET /settings`** / **`POST /settings`**: đọc/ghi cấu hình scheduler.
+- `schedEnabled` và `schedEntry` chuyển từ hằng số sang biến — thay đổi được qua UI.
+- `masterPoll()`: thêm nhánh `cur===4` → `loadSched()`.
+- `nav(4)`: tự động gọi `loadSched()` khi vào tab Cài đặt.
+
+### [2.9.0] - 2026-06-25
+Thay Basic Auth bằng form đăng nhập chỉ có ô Password (cookie-based session).
+
+- Xóa hoàn toàn HTTP Basic Auth (không còn hộp thoại username/password của trình duyệt).
+- Trang `/login`: form HTML tối giản 1 ô mật khẩu, nền tối, hiện "Sai mật khẩu" nếu sai.
+- `POST /login`: kiểm tra password → set cookie `sid=<token>` → redirect `/`.
+- `checkCookie()`: mọi request kiểm tra cookie trước khi xử lý.
+- `initAuthToken()`: token ngẫu nhiên tạo từ `millis()` lúc boot — đổi mỗi lần khởi động.
+- Fix NVS double-call: set `lastNtpAttempt` sau `ntpSync()` trong `setup()`.
+- Mật khẩu mặc định: `123456` — đổi `AUTH_PASS` trước khi deploy.
+
+### [2.8.0] - 2026-06-25
+NTP time sync + scheduler tự động tắt thiết bị.
+
+- `EthernetUDP` NTP client: sync giờ từ `216.239.35.0` (time.google.com) lúc boot, re-sync mỗi 6 tiếng, retry mỗi 30s nếu chưa sync.
+- `runScheduler()`: kiểm tra mỗi giây, kích hoạt trong window 5 phút sau mốc giờ (xử lý trường hợp mất điện rồi boot lại).
+- Mặc định: tắt tất cả lúc 18:00 — sửa `schedEntry` để đổi mốc.
+- Tắt đồng thời: 16 relay MEGA + 4 relay AMX CE-REL8 + 4 điều hòa LOGO!.
+- `schedFiredToday` (bitmask): mỗi mốc chỉ kích hoạt 1 lần/ngày, reset tự động khi sang ngày mới.
+
+### [2.7.1] - 2026-06-25
+Đổi mật khẩu mặc định thành `123456`. Đổi Basic Auth sang username rỗng (Base64 `":password"`) để trình duyệt chỉ hiện 1 ô Password. *(Thay thế hoàn toàn bởi v2.9.0)*
+
 ### [2.7.0] - 2026-06-25
 Thêm HTTP Basic Authentication để bảo vệ giao diện khi mở cổng NAT ra ngoài Internet.
 

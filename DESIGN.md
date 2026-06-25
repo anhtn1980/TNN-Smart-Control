@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v2.6.0 — 2026-06-25
+> Lần cập nhật gần nhất: v3.0.1 — 2026-06-25
 
 ---
 
@@ -43,7 +43,7 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 | Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v2.6.0 / 192.168.1.180 |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.0.1 / 192.168.1.180 |
 | MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
 | LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
 | AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |
@@ -94,7 +94,7 @@ kết nối nào để drop.
 
 Trước v2.6.0 có 5 route riêng: `GET /`, `/mega`, `/modbus`, `/amx`, `/kios` — đã gộp vào SPA để tránh socket W5500 cạn khi chuyển trang liên tục (đặc biệt trên kiosk).
 
-#### API (giữ nguyên qua các version)
+#### API
 
 | Route | Mô tả |
 |---|---|
@@ -104,6 +104,11 @@ Trước v2.6.0 có 5 route riêng: `GET /`, `/mega`, `/modbus`, `/amx`, `/kios`
 | `GET /ac/status` | JSON trạng thái 4 điều hòa từ LOGO! feedback V0.0-V0.3 |
 | `GET /amx/relay?ch=N&value=true\|false` | Set relay CE-REL8 kênh N |
 | `GET /amx/status` | JSON: `{"relay":[...],"io":[...]}` trạng thái CE-REL8 + CE-IO4 |
+| `GET /info` | JSON: `{fw, uptime, time, ntp, sched}` — debug từ xa |
+| `GET /settings` | JSON cấu hình scheduler hiện tại |
+| `POST /settings` | Lưu `enabled`, `hour`, `min` — ghi vào NVS flash |
+| `POST /login` | Kiểm tra password, set cookie `sid`, redirect `/` |
+| `GET /logout` | Xóa cookie, redirect `/login` |
 
 ### 3.3 SPA Architecture (v2.6.0)
 
@@ -346,7 +351,7 @@ Những thay đổi đã thử và gây ra vấn đề nghiêm trọng:
 ## 9. Cấu trúc file & version hiện tại
 
 ```
-Code_ESP32_Web_UI_TCP_client_.ino              v2.6.0   ESP32 Web server + SPA gateway
+Code_ESP32_Web_UI_TCP_client_.ino              v3.0.1   ESP32 Web server + SPA gateway
 Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino     v1.5.0   MEGA RS485 controller
 DESIGN.md                                               Tài liệu kiến trúc (file này)
 Changelog.md                                            Lịch sử thay đổi tất cả firmware
@@ -358,7 +363,7 @@ HuongDanSuDung.doc                                      Hướng dẫn sử dụ
 
 | Board | Thư viện |
 |---|---|
-| ESP32 | `Ethernet` (chuẩn) |
+| ESP32 | `Ethernet` (chuẩn), `Preferences` (NVS — có sẵn trong ESP32 Arduino core) |
 | MEGA2560 | `Ethernet2` (cho W5500) |
 
 ---
@@ -378,6 +383,14 @@ HuongDanSuDung.doc                                      Hướng dẫn sử dụ
 - Tên nút relay AMX: P.Họp / P.Tuấn / K.Doanh / H.Lang — v2.4.0
 - SPA: không load lại trang khi chuyển tab, không còn mất giao diện trên kiosk — v2.6.0
 - KIOS iframe browser với thanh địa chỉ, Tải lại, Mở tab mới — v2.6.0
+- Xác thực cookie-based (mật khẩu duy nhất, form HTML), /login + /logout — v2.7.1
+- Giảm Serial log: bỏ spam MEGA/AMX connect fail, chỉ log IO khi có thay đổi — v2.8.0
+- NTP đồng bộ giờ thực (216.239.35.0, UDP port 123, UTC+7), đồng hồ trên nav bar — v2.9.0
+- Lịch tắt tự động theo giờ hằng ngày (schedEntry), bù boot 5 phút — v2.9.0
+- /info endpoint JSON: firmware version, uptime, giờ hệ thống, trạng thái NTP, lịch — v3.0.0
+- Tab Cài đặt (Settings): toggle lịch, chỉnh giờ tắt, nút lưu, card thông tin hệ thống — v3.0.0
+- Lưu cấu hình lịch vào NVS (Preferences) — tồn tại sau khởi động lại — v3.0.1
+- Nút Đăng xuất trên nav bar — v3.0.0
 
 ### Còn hạn chế / chưa xác nhận 🔲
 - CE-IO4: `Subscribe` path không hoạt động (firmware CE-IO4 thực tế) → polling `get` mỗi 600ms (độ trễ tối đa 600ms)

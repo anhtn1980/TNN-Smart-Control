@@ -24,18 +24,20 @@
 <body>
 
 <h1>Hướng dẫn sử dụng — TNN Smart Control</h1>
-<p class="version">Phiên bản: ESP32 v2.6.0 | Ngày: 25/06/2026 | TNN SI — www.tnnsi.vn</p>
+<p class="version">Phiên bản: ESP32 v3.0.1 | Ngày: 25/06/2026 | TNN SI — www.tnnsi.vn</p>
 
 <hr>
 
 <h2>Mục lục</h2>
 <ol>
   <li>Giới thiệu hệ thống</li>
+  <li>Đăng nhập</li>
   <li>Truy cập giao diện</li>
   <li>Điều khiển đèn (tab Đèn)</li>
   <li>Điều khiển điều hòa (tab Điều hòa)</li>
   <li>Điều khiển AMX (tab AMX)</li>
   <li>Màn hình KIOS (tab KIOS)</li>
+  <li>Cài đặt hệ thống (tab ⚙️ Cài đặt)</li>
   <li>Xử lý sự cố thường gặp</li>
   <li>Thông tin kỹ thuật (dành cho kỹ thuật viên)</li>
 </ol>
@@ -51,24 +53,37 @@
 </table>
 <div class="note">Hệ thống hoạt động hoàn toàn trên mạng LAN nội bộ — không cần kết nối Internet.</div>
 
-<h2>2. Truy cập giao diện</h2>
+<h2>2. Đăng nhập</h2>
+<p>Lần đầu truy cập hoặc sau khi đăng xuất, trình duyệt sẽ chuyển tới trang đăng nhập:</p>
+<ol>
+  <li>Mở trình duyệt, vào địa chỉ <code>http://192.168.1.180</code></li>
+  <li>Trang đăng nhập xuất hiện với ô nhập mật khẩu.</li>
+  <li>Nhập mật khẩu: <strong>123456</strong></li>
+  <li>Nhấn <strong>Đăng nhập</strong> (hoặc Enter).</li>
+  <li>Giao diện chính hiện ra.</li>
+</ol>
+<div class="tip">Phiên đăng nhập được lưu trong trình duyệt. Không cần nhập lại mỗi lần mở tab mới (trên cùng trình duyệt).</div>
+<div class="note">Để đăng xuất: nhấn nút <strong>Đăng xuất</strong> ở góc phải trên cùng của giao diện.</div>
+
+<h2>3. Truy cập giao diện</h2>
 <p>Mở trình duyệt web và nhập địa chỉ:</p>
 <p style="font-size:14pt; font-weight:bold; color:#1a3a5c;">http://192.168.1.180</p>
 <div class="tip">Thiết bị phải kết nối vào cùng mạng LAN nội bộ (WiFi hoặc dây LAN).</div>
-<p>Giao diện gồm 4 tab ở đầu trang. Nhấn tab để chuyển — không cần tải lại trang:</p>
+<p>Sau khi đăng nhập, giao diện gồm 5 tab ở đầu trang và đồng hồ thực tại góc phải. Nhấn tab để chuyển — không cần tải lại trang:</p>
 <table>
   <tr><th>Tab</th><th>Chức năng</th></tr>
   <tr><td>Đèn</td><td>Bật/tắt 16 đèn văn phòng</td></tr>
   <tr><td>Điều hòa</td><td>Bật/tắt 4 máy điều hòa</td></tr>
   <tr><td>AMX</td><td>4 đèn AMX + trạng thái 4 công tắc tường</td></tr>
   <tr><td>KIOS</td><td>Trình duyệt nhúng (KC-Brain, SL-240C, URL tùy chọn)</td></tr>
+  <tr><td>⚙️ Cài đặt</td><td>Lịch tắt tự động, thông tin hệ thống</td></tr>
 </table>
 
-<h2>3. Điều khiển đèn (tab Đèn)</h2>
+<h2>4. Điều khiển đèn (tab Đèn)</h2>
 <p>Nhấn nút để bật/tắt từng đèn. Nút xanh lá = BẬT, nút xám = TẮT. Giao diện tự cập nhật mỗi 2 giây. Nhấn TẮT TẤT CẢ để tắt đồng loạt 16 kênh.</p>
 <p>Công tắc vật lý gắn tường cũng điều khiển được đèn — trạng thái đồng bộ lên web sau tối đa 2 giây.</p>
 
-<h2>4. Điều khiển điều hòa (tab Điều hòa)</h2>
+<h2>5. Điều khiển điều hòa (tab Điều hòa)</h2>
 <p>Nhấn nút để bật/tắt từng máy. Nút xanh lá = BẬT, xanh dương = TẮT.</p>
 <table>
   <tr><th>Nút</th><th>Máy điều hòa</th></tr>
@@ -80,12 +95,12 @@
 <div class="warn">Mỗi lần nhấn nút là 1 xung toggle. Không nhấn liên tục nhiều lần trong vòng 1 giây.</div>
 <p>Giao diện gốc LOGO!: <code>http://192.168.1.6/webroot/main.htm</code> — User: <code>Web User</code> — Pass: <code>123456</code></p>
 
-<h2>5. Điều khiển AMX (tab AMX)</h2>
+<h2>6. Điều khiển AMX (tab AMX)</h2>
 <p>Phần trên: 4 nút relay đèn (P.Họp / P.Tuấn / K.Doanh / H.Lang) — nhấn để bật/tắt.</p>
 <p>Phần dưới: 4 chỉ thị tròn IO1-IO4 hiển thị trạng thái công tắc tường. Xanh = đóng, xám = mở.</p>
 <p>Khi bấm công tắc tường, hệ thống toggle relay tương ứng (không phụ thuộc chiều đóng/mở của công tắc).</p>
 
-<h2>6. Màn hình KIOS (tab KIOS)</h2>
+<h2>7. Màn hình KIOS (tab KIOS)</h2>
 <p>Tab KIOS cung cấp trình duyệt nhúng để điều khiển thiết bị khác trong hệ thống:</p>
 <ul>
   <li>Nhấn nút KC-Brain hoặc SL-240C để mở giao diện thiết bị tương ứng.</li>
@@ -95,20 +110,48 @@
 </ul>
 <div class="tip">Nếu giao diện thiết bị trong iframe hiển thị trống, nhấn "Mở tab mới".</div>
 
-<h2>7. Xử lý sự cố thường gặp</h2>
+<h2>8. Cài đặt hệ thống (tab ⚙️ Cài đặt)</h2>
+<p>Tab Cài đặt gồm 2 phần: lịch tắt tự động và thông tin hệ thống.</p>
+
+<h3>8.1 Lịch tắt tự động</h3>
+<p>Hệ thống có thể tự động tắt toàn bộ đèn và điều hòa vào một giờ cố định hằng ngày.</p>
+<table>
+  <tr><th>Thao tác</th><th>Hướng dẫn</th></tr>
+  <tr><td>Bật/tắt lịch</td><td>Nhấn công tắc toggle bên cạnh "Lịch tắt tự động"</td></tr>
+  <tr><td>Đặt giờ tắt</td><td>Nhập giờ và phút vào 2 ô tương ứng (VD: 18 giờ 00 phút)</td></tr>
+  <tr><td>Lưu cài đặt</td><td>Nhấn nút <strong>Lưu cài đặt</strong> — hệ thống xác nhận và lưu vào bộ nhớ flash</td></tr>
+</table>
+<div class="note">Cài đặt được lưu vào bộ nhớ flash của ESP32 (NVS). Sau khi mất điện hoặc khởi động lại, cài đặt vẫn được giữ nguyên.</div>
+<div class="tip">Giờ hệ thống được đồng bộ tự động qua Internet (NTP). Đảm bảo router có kết nối Internet để giờ luôn chính xác.</div>
+
+<h3>8.2 Thông tin hệ thống</h3>
+<p>Card thông tin hiển thị trạng thái thực tế của ESP32:</p>
+<table>
+  <tr><th>Thông tin</th><th>Ý nghĩa</th></tr>
+  <tr><td>Firmware</td><td>Phiên bản firmware hiện tại</td></tr>
+  <tr><td>Uptime</td><td>Thời gian ESP32 đã chạy liên tục kể từ lần khởi động gần nhất</td></tr>
+  <tr><td>Giờ hệ thống</td><td>Giờ thực đang dùng để kiểm tra lịch (múi giờ Việt Nam UTC+7)</td></tr>
+  <tr><td>NTP</td><td>Trạng thái đồng bộ giờ: OK hoặc chưa đồng bộ</td></tr>
+  <tr><td>Lịch tắt</td><td>Trạng thái lịch và giờ hẹn hiện tại</td></tr>
+</table>
+
+<h2>9. Xử lý sự cố thường gặp</h2>
 <table>
   <tr><th>Triệu chứng</th><th>Cách xử lý</th></tr>
   <tr><td>Không truy cập được http://192.168.1.180</td><td>Kiểm tra thiết bị cùng mạng LAN, ESP32 đã cắm nguồn và dây LAN.</td></tr>
+  <tr><td>Trang đăng nhập yêu cầu mật khẩu</td><td>Nhập mật khẩu: <strong>123456</strong></td></tr>
   <tr><td>Trạng thái không cập nhật</td><td>Kiểm tra nguồn và dây LAN của MEGA/LOGO!. ESP32 tự reconnect sau 3-5 giây.</td></tr>
   <tr><td>Điều hòa không phản hồi</td><td>Kiểm tra nguồn LOGO! và dây LAN. Xác nhận Modbus Server đã bật trong Logo! Soft Comfort.</td></tr>
   <tr><td>Chỉ thị IO không đổi màu</td><td>Truy cập http://192.168.1.7, đặt Mode=INPUT và inputMode=DIGITAL cho 4 IO.</td></tr>
   <tr><td>Relay AMX không phản hồi</td><td>Kiểm tra CE-REL8 tại http://192.168.1.204 và dây LAN.</td></tr>
   <tr><td>KIOS iframe trống</td><td>Nhấn "Mở tab mới" để mở giao diện thiết bị trực tiếp.</td></tr>
+  <tr><td>Lịch tắt không hoạt động</td><td>Kiểm tra giờ hệ thống tại tab Cài đặt. Nếu NTP chưa đồng bộ, đảm bảo router có Internet.</td></tr>
+  <tr><td>Cài đặt lịch mất sau khi tắt nguồn</td><td>Kiểm tra firmware version ≥ v3.0.1. Nếu đúng version, lưu lại cài đặt một lần và khởi động lại để kiểm tra.</td></tr>
 </table>
 
-<h2>8. Thông tin kỹ thuật (dành cho kỹ thuật viên)</h2>
+<h2>10. Thông tin kỹ thuật (dành cho kỹ thuật viên)</h2>
 
-<h3>8.1 Địa chỉ IP toàn hệ thống</h3>
+<h3>10.1 Địa chỉ IP toàn hệ thống</h3>
 <table>
   <tr><th>Thiết bị</th><th>IP</th><th>Port</th><th>Giao thức</th></tr>
   <tr><td>ESP32 (Web server)</td><td>192.168.1.180</td><td>80</td><td>HTTP</td></tr>
@@ -119,24 +162,33 @@
   <tr><td>AMX CE-IRS4 (IR, dự phòng)</td><td>192.168.1.203</td><td>44197</td><td>TCP AMX text</td></tr>
 </table>
 
-<h3>8.2 Version firmware</h3>
+<h3>10.2 Version firmware</h3>
 <table>
   <tr><th>Firmware</th><th>Version</th></tr>
-  <tr><td>Code_ESP32_Web_UI_TCP_client_.ino</td><td>v2.6.0</td></tr>
+  <tr><td>Code_ESP32_Web_UI_TCP_client_.ino</td><td>v3.0.1</td></tr>
   <tr><td>Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino</td><td>v1.5.0</td></tr>
 </table>
 
-<h3>8.3 Kiểm tra nhanh từ trình duyệt</h3>
+<h3>10.3 Kiểm tra nhanh từ trình duyệt</h3>
 <table>
   <tr><th>URL kiểm tra</th><th>Kết quả mong đợi</th></tr>
   <tr><td>http://192.168.1.180/status</td><td>L1=0,L2=0,...,L16=0</td></tr>
   <tr><td>http://192.168.1.180/ac/status</td><td>JSON trạng thái 4 điều hòa</td></tr>
   <tr><td>http://192.168.1.180/amx/status</td><td>JSON relay + IO AMX</td></tr>
+  <tr><td>http://192.168.1.180/info</td><td>JSON: fw, uptime, time, ntp, sched</td></tr>
   <tr><td>http://192.168.1.180/cmd?c=set%20/relay/1/state%20true</td><td>OK (bật đèn 1)</td></tr>
   <tr><td>http://192.168.1.180/amx/relay?ch=1&amp;value=true</td><td>OK (bật relay AMX 1)</td></tr>
 </table>
 
-<h3>8.4 Giao thức lệnh AMX</h3>
+<h3>10.4 Xác thực</h3>
+<p>ESP32 dùng cookie-based session authentication. Sau khi đăng nhập thành công tại <code>/login</code>, trình duyệt nhận cookie <code>sid=&lt;token&gt;</code>. Mọi request sau đó tự động gửi kèm cookie — không cần thao tác thêm. Đăng xuất tại <code>/logout</code> xóa cookie và yêu cầu đăng nhập lại.</p>
+<div class="note">Mật khẩu mặc định: <strong>123456</strong>. Để đổi mật khẩu, sửa <code>#define AUTH_PASS</code> trong firmware và nạp lại.</div>
+
+<h3>10.5 NTP và lịch tắt</h3>
+<p>ESP32 đồng bộ giờ qua NTP server <code>216.239.35.0</code> (time.google.com, IP cố định, không cần DNS). Múi giờ UTC+7. Đồng bộ lại mỗi 6 giờ.</p>
+<p>Lịch tắt lưu vào NVS (Preferences): namespace <code>tnn</code>, key <code>sched_en</code> / <code>sched_h</code> / <code>sched_m</code>. Mặc định 18:00 khi chưa cấu hình.</p>
+
+<h3>10.6 Giao thức lệnh AMX</h3>
 <p>Tất cả lệnh kết thúc bằng \n (0x0A):</p>
 <table>
   <tr><th>Lệnh</th><th>Mô tả</th></tr>
@@ -145,7 +197,7 @@
   <tr><td><code>get /relay/N/state</code></td><td>Đọc relay N (CE-REL8)</td></tr>
 </table>
 
-<h3>8.5 Cấu hình CE-IO4 thủ công</h3>
+<h3>10.7 Cấu hình CE-IO4 thủ công</h3>
 <p>Truy cập <code>http://192.168.1.7</code>, đặt Mode = INPUT và Input Mode = DIGITAL cho 4 IO.</p>
 <div class="note">Subscribe không hoạt động trên firmware CE-IO4 — ESP32 dùng polling get mỗi 600ms. Độ trễ tối đa 600ms.</div>
 
