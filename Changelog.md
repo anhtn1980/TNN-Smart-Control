@@ -41,6 +41,25 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.0.5] - 2026-06-25
+Form đổi mật khẩu ẩn sau easter egg 5-tap trên tiêu đề "Thông tin hệ thống".
+
+- Form đổi mật khẩu không còn hiển thị mặc định — không có gợi ý UI từ bên ngoài.
+- Nhấn nhanh vào tiêu đề **"ℹ️ Thông tin hệ thống"** 5 lần liên tiếp trong vòng 1.5s → form hiện/ẩn.
+- JS: biến đếm `_itap` + `setTimeout` reset — không tốn tài nguyên.
+
+### [3.0.4] - 2026-06-25
+Form đổi mật khẩu thu gọn — nhấn tiêu đề để mở (thay thế bởi easter egg ở v3.0.5).
+
+### [3.0.3] - 2026-06-25
+Thêm ô "Nhập lại mật khẩu mới" vào form đổi mật khẩu — kiểm tra khớp phía JS trước khi gửi.
+
+### [3.0.2] - 2026-06-25
+Đổi mật khẩu qua Settings tab + fix bug lịch tự bật lại.
+
+- **Đổi mật khẩu**: `authPass` chuyển từ `#define` sang biến `String` đọc từ NVS (key `auth_p`, mặc định `123456`). `POST /settings` xử lý param `old_p`/`new_p` — kiểm tra mật khẩu cũ, validate độ dài 4–32 ký tự, lưu vào NVS. Form gồm 3 ô: mật khẩu hiện tại, mật khẩu mới, nhập lại.
+- **Fix**: `loadSched()` được gọi mỗi 2s bởi `masterPoll()` → ghi đè checkbox/input giờ trước khi người dùng kịp bấm Lưu. Fix: xóa nhánh `cur===4` khỏi `masterPoll()` — `loadSched()` chỉ chạy 1 lần khi vào tab qua `nav(4)`.
+
 ### [3.0.1] - 2026-06-25
 Lưu settings vĩnh viễn vào flash NVS (Preferences).
 
