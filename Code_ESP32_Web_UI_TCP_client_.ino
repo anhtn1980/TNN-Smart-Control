@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.1"
+#define FW_VERSION "3.0.2"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -43,8 +43,8 @@ const int   logoPort = 504;
 #define LOGO_MODBUS_TIMEOUT_MS 200
 
 /* ===== AUTH (cookie-based, password only) ===== */
-// Đổi AUTH_PASS trước khi nạp firmware
-#define AUTH_PASS "123456"
+#define AUTH_PASS_DEFAULT "123456"
+static String authPass  = AUTH_PASS_DEFAULT;  // đọc từ NVS khi boot
 // Token ngẫu nhiên được tạo lúc boot (millis-based) — đổi mỗi lần ESP32 khởi động
 static String authToken = "";
 
@@ -521,7 +521,7 @@ void handleWebRequest(EthernetClient client) {
     String submitted = (pi >= 0) ? body.substring(pi + 2) : "";
     // URL decode dấu + và %xx đơn giản
     submitted.replace("+", " ");
-    if (submitted == AUTH_PASS) {
+    if (submitted == authPass) {
       // Đúng mật khẩu → set cookie, redirect về /
       client.println("HTTP/1.1 302 Found\r\n"
                      "Location: /\r\n"
@@ -765,6 +765,16 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='save-btn' onclick='saveSched()'>💾 Lưu cài đặt</button>");
     client.println("<div class='sched-status' id='sched-status'></div>");
     client.println("</div>");  // setting-card
+    // Password card
+    client.println("<div class='setting-card'>");
+    client.println("<h3>🔑 Đổi mật khẩu</h3>");
+    client.println("<div class='setting-row'><label>Mật khẩu hiện tại</label>"
+                   "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
+    client.println("<div class='setting-row'><label>Mật khẩu mới</label>"
+                   "<input type='password' id='new-p' placeholder='4–32 ký tự' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
+    client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
+    client.println("<div class='sched-status' id='pass-status'></div>");
+    client.println("</div>");  // password card
     // Info card
     client.println("<div class='setting-card'>");
     client.println("<h3>ℹ️ Thông tin hệ thống</h3>");
@@ -846,9 +856,23 @@ void handleWebRequest(EthernetClient client) {
     client.println("    body:'enabled='+en+'&hour='+h+'&min='+m})");
     client.println("  .then(function(){loadSched();document.getElementById('sched-status').innerText='✅ Đã lưu!';})");
     client.println("  .catch(function(){document.getElementById('sched-status').innerText='❌ Lỗi lưu';});}");
+    client.println("function changePass(){");
+    client.println("  var o=document.getElementById('old-p').value;");
+    client.println("  var n=document.getElementById('new-p').value;");
+    client.println("  var s=document.getElementById('pass-status');");
+    client.println("  if(!o||!n){s.innerText='⚠️ Nhập đủ mật khẩu cũ và mới';return;}");
+    client.println("  if(n.length<4||n.length>32){s.innerText='⚠️ Mật khẩu mới 4–32 ký tự';return;}");
+    client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},");
+    client.println("    body:'old_p='+encodeURIComponent(o)+'&new_p='+encodeURIComponent(n)})");
+    client.println("  .then(function(r){return r.json();}).then(function(d){");
+    client.println("    if(d.ok){s.innerText='✅ Đổi mật khẩu thành công!';document.getElementById('old-p').value='';document.getElementById('new-p').value='';}");
+    client.println("    else if(d.err==='wrong_pass')s.innerText='❌ Mật khẩu hiện tại không đúng';");
+    client.println("    else s.innerText='❌ Lỗi: '+d.err;");
+    client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
 
     // ── polling master ──
-    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();else if(cur===4)loadSched();}");
+    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
+    // Cập nhật uptime/NTP tại tab Cài đặt qua updateClock() (mỗi 1s) — không reload form lịch tự động
     client.println("setInterval(masterPoll,2000);");
     // Khởi động
     client.println("nav(0);pollMega();updateClock();");
@@ -1220,6 +1244,41 @@ void handleWebRequest(EthernetClient client) {
         return (end < 0 ? body.substring(idx + key.length() + 1)
                         : body.substring(idx + key.length() + 1, end)).toInt();
       };
+      // ── đổi mật khẩu (nếu có) ──
+      auto getStr = [&](const String& key) -> String {
+        int idx = body.indexOf(key + "=");
+        if (idx < 0) return "";
+        int end = body.indexOf("&", idx);
+        String v = (end < 0) ? body.substring(idx + key.length() + 1)
+                              : body.substring(idx + key.length() + 1, end);
+        v.replace("+", " ");
+        return v;
+      };
+      String oldp = getStr("old_p");
+      String newp = getStr("new_p");
+      if (newp.length() > 0) {
+        if (oldp != authPass) {
+          client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+          client.println("{\"ok\":false,\"err\":\"wrong_pass\"}");
+          client.stop(); return;
+        }
+        if (newp.length() < 4 || newp.length() > 32) {
+          client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+          client.println("{\"ok\":false,\"err\":\"bad_len\"}");
+          client.stop(); return;
+        }
+        authPass = newp;
+        Preferences prefs;
+        prefs.begin("tnn", false);
+        prefs.putString("auth_p", authPass);
+        prefs.end();
+        Serial.println("Password changed");
+        client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+        client.println("{\"ok\":true,\"changed\":true}");
+        client.stop(); return;
+      }
+
+      // ── lịch tắt ──
       int en = getParam("enabled"); if (en >= 0) schedEnabled = (en == 1);
       int hr = getParam("hour");    if (hr >= 0 && hr <= 23) schedEntry.hour = hr;
       int mn = getParam("min");     if (mn >= 0 && mn <= 59) schedEntry.minute = mn;
@@ -1283,6 +1342,7 @@ void setup() {
     schedEnabled      = prefs.getBool("sched_en", true);
     schedEntry.hour   = prefs.getUChar("sched_h", 18);
     schedEntry.minute = prefs.getUChar("sched_m", 0);
+    authPass          = prefs.getString("auth_p", AUTH_PASS_DEFAULT);
     prefs.end();
     Serial.printf("Settings loaded: sched=%s %02d:%02d\n",
                   schedEnabled ? "ON" : "OFF", schedEntry.hour, schedEntry.minute);
