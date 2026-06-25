@@ -392,20 +392,187 @@ void handleWebRequest(EthernetClient client) {
     client.stop(); return;
   }
 
-  /* ===== WEB UI MENU ===== */
-  if (request.startsWith("GET / ")) {
+  /* ===== SPA — Single Page Application ===== */
+  if (request.startsWith("GET / ") || request.startsWith("GET /mega") ||
+      request.startsWith("GET /modbus") || request.startsWith("GET /amx ") ||
+      request.startsWith("GET /kios")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}h2{margin-top:10px}.menu{max-width:500px;margin:30px auto;display:grid;gap:14px;}a{display:block;padding:18px;border-radius:12px;background:#333;color:#fff;text-decoration:none;font-size:18px;border:1px solid #555;}a:hover{background:#444;}</style></head><body>");
-    client.println("<h2>TNN SI - SMART CONTROL</h2>");
-    client.print("<p style='opacity:.5;font-size:12px;margin:4px 0 16px'>ESP32 v"); client.print(FW_VERSION); client.println(" &nbsp;|&nbsp; 192.168.1.180</p>");
-    client.println("<p>Chọn nhóm thiết bị cần điều khiển:</p>");
-    client.println("<div class='menu'>");
-    client.println("<a href='/mega'>🔌 Điều khiển Đèn (MEGA)</a>");
-    client.println("<a href='/modbus'>❄️ Điều khiển Điều hòa (LOGO!)</a>");
-    client.println("<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>");
-    client.println("<a href='/kios' style='background:#1a3a1a;border-color:#2a5a2a;'>🖥️ Truy cập trang KIOS</a>");
-    client.println("</div></body></html>");
+    // ── HEAD ──
+    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>TNN Smart Control</title>");
+    client.println("<style>");
+    client.println("*{box-sizing:border-box;margin:0;padding:0}");
+    client.println("body{font-family:Arial,sans-serif;background:#111;color:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}");
+    // nav bar
+    client.println(".nav{display:flex;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0}");
+    client.println(".nav-btn{flex:1;padding:11px 4px;font-size:12px;text-align:center;background:none;border:none;color:#888;cursor:pointer;border-bottom:2px solid transparent;transition:.15s}");
+    client.println(".nav-btn.active{color:#fff;border-bottom-color:#4a9eff}");
+    client.println(".nav-btn:hover{color:#ccc}");
+    // pages
+    client.println(".page{display:none;flex:1;overflow-y:auto;flex-direction:column}");
+    client.println(".page.active{display:flex}");
+    // shared top bar
+    client.println(".top{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap}");
+    client.println(".top h2{margin:0;font-size:15px;flex:1}");
+    client.println(".info-btn{padding:5px 9px;border-radius:6px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:12px}");
+    client.println(".info-btn:hover{background:#333;color:#fff}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:12px 14px;font-size:11.5px;line-height:1.7;color:#bbb;flex-shrink:0}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 4px;font-size:12px}");
+    client.println(".info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 4px;border-radius:3px}");
+    client.println(".cfg{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin-top:6px}");
+    client.println(".cfg .k{color:#888}.cfg .v{color:#7dd3fc;font-family:monospace}");
+    // mega
+    client.println(".grid16{display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:8px;padding:10px}");
+    client.println(".grid16 button{height:56px;font-size:11px;border-radius:9px;border:none;background:#333;color:#fff;cursor:pointer;transition:.1s}");
+    client.println(".grid16 button:active,.grid16 button.pressing{transform:scale(.95);background:#666}");
+    client.println(".grid16 button.on{background:#1a6a1a}");
+    // ac
+    client.println(".grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;padding:20px 14px}");
+    client.println(".ac-btn{height:86px;border-radius:12px;border:2px solid #444;background:#222;color:#fff;font-size:13px;font-weight:bold;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;transition:.15s}");
+    client.println(".ac-btn .icon{font-size:24px}.ac-btn.on{background:#0a4a7a;border-color:#1a8fd1;color:#7dd3fc}");
+    client.println(".ac-btn.cooling{opacity:.5;pointer-events:none}.ac-btn:active{transform:scale(.96)}");
+    client.println(".dot{width:7px;height:7px;border-radius:50%;background:#555}.on .dot{background:#1a8fd1}");
+    // amx
+    client.println(".section{padding:10px 12px}.section-title{font-size:12px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}");
+    client.println(".relay-btn{width:100%;padding:14px;border-radius:10px;border:1px solid #444;background:#222;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;margin-bottom:8px;transition:.15s}");
+    client.println(".relay-btn.on{background:#1a4a1a;border-color:#2a7a2a}.relay-btn .icon{font-size:20px}");
+    client.println(".io-grid{display:flex;gap:12px;flex-wrap:wrap}.io-indicator{text-align:center;font-size:11px;color:#888}");
+    client.println(".io-dot{width:14px;height:14px;border-radius:50%;background:#333;margin:4px auto 0}");
+    client.println(".io-indicator.active .io-dot{background:#55aaff}");
+    // kios
+    client.println("#kios-page{padding:0}");
+    client.println(".kios-bar{display:flex;gap:6px;padding:7px 10px;background:#111;border-bottom:1px solid #222;flex-shrink:0;flex-wrap:wrap}");
+    client.println(".site-btn{padding:6px 14px;border-radius:7px;border:1px solid #335;background:#1a1a2a;color:#aad4ff;font-size:12px;font-weight:bold;cursor:pointer}");
+    client.println(".site-btn.active{background:#225588;border-color:#4488cc;color:#fff}");
+    client.println(".site-btn.add{background:#1a2a1a;border-color:#3a5a3a;color:#88cc88}");
+    client.println(".url-bar{display:none;gap:6px;padding:6px 10px;background:#141414;border-bottom:1px solid #222;flex-shrink:0;align-items:center;flex-wrap:wrap}");
+    client.println("#url-input{flex:1;min-width:160px;padding:5px 9px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;font-size:12px}");
+    client.println(".kbtn{padding:5px 10px;border-radius:6px;color:#fff;border:none;cursor:pointer;font-size:12px}");
+    client.println(".kios-frame{flex:1;width:100%;border:none;background:#fff}");
+    // status bar
+    client.println(".sbar{font-size:10px;opacity:.4;padding:6px 12px;flex-shrink:0}");
+    client.println("</style></head><body>");
+
+    // ── NAV BAR ──
+    client.println("<div class='nav'>");
+    client.println("<button class='nav-btn' onclick='nav(0)'>🔌<br>Đèn</button>");
+    client.println("<button class='nav-btn' onclick='nav(1)'>❄️<br>Điều hòa</button>");
+    client.println("<button class='nav-btn' onclick='nav(2)'>🧩<br>AMX</button>");
+    client.println("<button class='nav-btn' onclick='nav(3)'>🖥️<br>KIOS</button>");
+    client.println("</div>");
+
+    // ── PAGE 0: MEGA ──
+    client.println("<div class='page' id='p0'>");
+    client.println("<div class='top'><h2>🔌 MEGA CONTROL</h2><button class='info-btn' onclick='ti(0)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i0'>");
+    client.println("Browser → <code>ESP32 :80</code> → TCP :9000 → <code>MEGA 192.168.1.178</code> → RS485 → Board relay 16 kênh<br>Connect-per-transaction: mỗi lệnh mở TCP mới, gửi, đọc, đóng.");
+    client.println("<div class='cfg'><span class='k'>MEGA IP</span><span class='v'>192.168.1.178:9000</span>");
+    client.println("<span class='k'>Poll</span><span class='v'>2s</span><span class='k'>Timeout</span><span class='v'>300ms</span></div></div>");
+    client.println("<div class='grid16'>");
+    const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
+    for (int i = 1; i <= 16; i++) {
+      client.print("<button id='L"); client.print(i); client.print("'>");
+      client.print(i); client.print(". "); client.print(names[i-1]); client.println("</button>");
+    }
+    client.println("<button id='ALL' style='background:#6a1a1a;grid-column:1/-1'>🔴 TẮT TẤT CẢ</button></div>");
+    client.println("<div class='sbar' id='sb0'>Đang tải...</div></div>");
+
+    // ── PAGE 1: MODBUS / AC ──
+    client.println("<div class='page' id='p1'>");
+    client.println("<div class='top'><h2>❄️ ĐIỀU HÒA (LOGO! 8)</h2><button class='info-btn' onclick='ti(1)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i1'>");
+    client.println("Browser → <code>ESP32 :80</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4<br>");
+    client.println("Pulse pattern: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. Feedback: đọc V0.0-V0.3 (FC1).");
+    client.println("<div class='cfg'><span class='k'>LOGO! IP</span><span class='v'>192.168.1.6:504</span>");
+    client.println("<span class='k'>Pulse</span><span class='v'>500ms</span><span class='k'>Cooldown</span><span class='v'>1500ms/kênh</span></div></div>");
+    client.println("<div class='grid4'>");
+    const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='ac-btn' id='ac"); client.print(i); client.print("' onclick='acToggle("); client.print(i); client.println(")'>");
+      client.print("<span class='icon'>❄️</span><span>"); client.print(acNames[i]); client.println("</span><div class='dot'></div></button>");
+    }
+    client.println("</div><div class='sbar' id='sb1'>Đang tải...</div></div>");
+
+    // ── PAGE 2: AMX ──
+    client.println("<div class='page' id='p2'>");
+    client.println("<div class='top'><h2>🧩 AMX CONTROL</h2><button class='info-btn' onclick='ti(2)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i2'>");
+    client.println("Mỗi lần công tắc tường <b>thay đổi</b> → toggle relay. Chờ 300ms nhường Kramer → đọc relay thật → toggle nếu chưa đổi.");
+    client.println("<div class='cfg'><span class='k'>CE-IO4</span><span class='v'>192.168.1.7:44197 (poll 600ms)</span>");
+    client.println("<span class='k'>CE-REL8</span><span class='v'>192.168.1.204:44197</span></div></div>");
+    client.println("<div class='section'><div class='section-title'>CE-REL8 — Relay đèn (1-4)</div>");
+    const char* amxRelayNames[] = {"P.Họp","P.Tuấn","K.Doanh","H.Lang"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='relay-btn' id='R"); client.print(i+1); client.print("' onclick='amxToggle("); client.print(i+1); client.println(")'>");
+      client.print("<span class='icon'>💡</span><span>Relay "); client.print(i+1); client.print(" — "); client.print(amxRelayNames[i]); client.println("</span></button>");
+    }
+    client.println("</div><div class='section'><div class='section-title'>CE-IO4 — Công tắc tường (1-4)</div><div class='io-grid'>");
+    const char* amxIoNames[] = {"IO 1","IO 2","IO 3","IO 4"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<div class='io-indicator' id='IO"); client.print(i+1); client.print("'>"); client.print(amxIoNames[i]); client.println("<div class='io-dot'></div></div>");
+    }
+    client.println("</div></div><div class='sbar' id='sb2'>Đang tải...</div></div>");
+
+    // ── PAGE 3: KIOS ──
+    client.println("<div class='page' id='p3' id='kios-page'>");
+    client.println("<div class='kios-bar'>");
+    client.println("<div class='site-btn' id='kb0' onclick='kLoad(0)'>KC-Brain</div>");
+    client.println("<div class='site-btn' id='kb1' onclick='kLoad(1)'>SL-240C</div>");
+    client.println("<div class='site-btn add' onclick='kToggleInput()'>＋ Nhập URL</div>");
+    client.println("<div class='site-btn' style='margin-left:auto;background:#1a2a1a;border-color:#2a4a2a' onclick='kReload()'>🔄</div>");
+    client.println("</div>");
+    client.println("<div class='url-bar' id='kurl'>");
+    client.println("<input id='url-input' type='text' placeholder='http://...'>");
+    client.println("<button class='kbtn' style='background:#225588' onclick='kGo()'>▶ Mở</button>");
+    client.println("<button class='kbtn' style='background:#333' onclick='kNewTab()'>↗ Tab</button></div>");
+    client.println("<iframe id='kf' class='kios-frame' src=''></iframe></div>");
+
+    // ── JAVASCRIPT ──
+    client.println("<script>");
+    // navigation
+    client.println("var pages=4,cur=0;");
+    client.println("function nav(i){");
+    client.println("  document.querySelectorAll('.page').forEach(function(p,j){p.classList.toggle('active',j===i);});");
+    client.println("  document.querySelectorAll('.nav-btn').forEach(function(b,j){b.classList.toggle('active',j===i);});");
+    client.println("  cur=i;if(i===3&&!document.getElementById('kf').src)kLoad(0);");
+    client.println("}");
+    // info panel toggle
+    client.println("function ti(n){var p=document.getElementById('i'+n);p.style.display=p.style.display==='block'?'none':'block';}");
+
+    // ── MEGA logic ──
+    client.println("var pendingM={},cmdFlight=false,lastCmd=0,qCmd=null;");
+    client.println("function applyMega(t){t.split(',').forEach(function(p){var kv=p.trim().split('=');if(kv.length!=2)return;var k=kv[0].trim(),v=kv[1].trim();var b=document.getElementById(k);if(!b)return;var on=(v==='1');b.classList.toggle('on',on);pendingM[k]=on;});document.getElementById('sb0').innerText='Cập nhật: '+new Date().toLocaleTimeString();}");
+    client.println("function sendM(c,b){var now=Date.now();if(now-lastCmd<150){qCmd={c,b};setTimeout(function(){if(!cmdFlight&&qCmd){var q=qCmd;qCmd=null;sendM(q.c,q.b);}},150);return;}lastCmd=now;cmdFlight=true;if(b){b.classList.add('pressing');setTimeout(function(){b.classList.remove('pressing');},90);}fetch('/cmd?c='+encodeURIComponent(c)).then(function(){setTimeout(pollMega,80);}).catch(function(){setTimeout(pollMega,150);}).finally(function(){cmdFlight=false;if(qCmd){var q=qCmd;qCmd=null;sendM(q.c,q.b);}});}");
+    client.println("for(var _i=1;_i<=16;_i++){(function(i){var b=document.getElementById('L'+i);if(b)b.onclick=function(){var k='L'+i,cur=(k in pendingM)?pendingM[k]:b.classList.contains('on'),next=!cur;pendingM[k]=next;b.classList.toggle('on',next);sendM('set /relay/'+i+'/state '+(next?'true':'false'),b);};}(_i));}");
+    client.println("document.getElementById('ALL').onclick=function(e){pendingM={};sendM('set /system/all off',e.target);};");
+    client.println("function pollMega(){fetch('/status').then(function(r){return r.text();}).then(applyMega).catch(function(){document.getElementById('sb0').innerText='Lỗi kết nối MEGA';});}");
+
+    // ── AC logic ──
+    client.println("var COOL=1600,lastAC=[-1e9,-1e9,-1e9,-1e9];");
+    client.println("function acToggle(ch){var now=Date.now();if(now-lastAC[ch]<COOL)return;lastAC[ch]=now;var b=document.getElementById('ac'+ch);b.classList.add('cooling');fetch('/ac/toggle?ch='+ch).then(function(){setTimeout(pollAC,700);}).catch(function(){setTimeout(pollAC,1000);});setTimeout(function(){b.classList.remove('cooling');},COOL);}");
+    client.println("function pollAC(){fetch('/ac/status').then(function(r){return r.json();}).then(function(d){d.ac.forEach(function(v,i){document.getElementById('ac'+i).classList.toggle('on',!!v);});document.getElementById('sb1').innerText='Cập nhật: '+new Date().toLocaleTimeString();}).catch(function(){document.getElementById('sb1').innerText='Lỗi kết nối LOGO!';});}");
+
+    // ── AMX logic ──
+    client.println("var pendingR={};");
+    client.println("function amxToggle(ch){var b=document.getElementById('R'+ch);var on=(ch in pendingR)?pendingR[ch]:b.classList.contains('on');var next=!on;pendingR[ch]=next;b.classList.toggle('on',next);fetch('/amx/relay?ch='+ch+'&value='+next).then(function(){setTimeout(pollAMX,300);}).catch(function(){setTimeout(pollAMX,500);});}");
+    client.println("function pollAMX(){fetch('/amx/status').then(function(r){return r.json();}).then(function(d){d.relay.forEach(function(v,i){var b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingR[i+1]=!!v;}});d.io.forEach(function(v,i){var el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});document.getElementById('sb2').innerText='Cập nhật: '+new Date().toLocaleTimeString();}).catch(function(){document.getElementById('sb2').innerText='Lỗi kết nối AMX';});}");
+
+    // ── KIOS logic ──
+    client.println("var kSites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
+    client.println("var kfr=document.getElementById('kf'),kinp=document.getElementById('url-input'),kub=document.getElementById('kurl');");
+    client.println("function kLoad(i){kfr.src=kSites[i];kub.style.display='none';[0,1].forEach(function(j){document.getElementById('kb'+j).classList.toggle('active',j===i);});}");
+    client.println("function kToggleInput(){kub.style.display=kub.style.display==='flex'?'none':'flex';if(kub.style.display==='flex')kinp.focus();}");
+    client.println("function kGo(){var u=kinp.value.trim();if(!u)return;if(!u.startsWith('http'))u='http://'+u;kinp.value=u;kfr.src=u;}");
+    client.println("function kNewTab(){var u=kfr.src||kinp.value.trim();if(u)window.open(u,'_blank');}");
+    client.println("function kReload(){kfr.src=kfr.src;}");
+    client.println("kinp.addEventListener('keydown',function(e){if(e.key==='Enter')kGo();});");
+
+    // ── polling master ──
+    // Chỉ poll trang đang active để tiết kiệm socket
+    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
+    client.println("setInterval(masterPoll,2000);");
+    // Khởi động: load trang 0 và poll ngay
+    client.println("nav(0);pollMega();");
+    client.println("</script></body></html>");
     client.stop(); return;
   }
 
