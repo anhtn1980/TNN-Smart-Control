@@ -3,7 +3,7 @@
 #include <EthernetUdp.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.8.0"
+#define FW_VERSION "2.9.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -41,12 +41,57 @@ const int   logoPort = 504;
 #define LOGO_COOLDOWN_MS    1500
 #define LOGO_MODBUS_TIMEOUT_MS 200
 
-/* ===== BASIC AUTH ===== */
-// Chỉ cần password — trình duyệt hiện 1 ô "Password", không hỏi username
-// Đổi AUTH_PASS và AUTH_B64 (= Base64 của ":password") trước khi nạp firmware
-// Tính lại: echo -n ":mat_khau_moi" | base64
+/* ===== AUTH (cookie-based, password only) ===== */
+// Đổi AUTH_PASS trước khi nạp firmware
 #define AUTH_PASS "tnn@2026"
-static const char AUTH_B64[] = "OnRubkAyMDI2";  // Base64(":tnn@2026")
+// Token ngẫu nhiên được tạo lúc boot (millis-based) — đổi mỗi lần ESP32 khởi động
+static String authToken = "";
+
+void initAuthToken() {
+  // Tạo token đơn giản từ millis + hằng số — đủ cho mạng nội bộ/NAT
+  unsigned long seed = millis() ^ 0xDEADBEEF;
+  authToken = String(seed, HEX);
+}
+
+bool checkCookie(const String& req) {
+  int idx = req.indexOf("Cookie:");
+  if (idx < 0) return false;
+  int end = req.indexOf("\r\n", idx);
+  String cookies = req.substring(idx + 7, end);
+  return cookies.indexOf("sid=" + authToken) >= 0;
+}
+
+void serveLoginPage(EthernetClient& client, bool wrongPass) {
+  client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n");
+  client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>TNN Smart Control</title>"
+    "<style>"
+    "body{margin:0;display:flex;align-items:center;justify-content:center;"
+    "height:100vh;background:#1a1a2e;font-family:Arial,sans-serif;}"
+    ".box{background:#fff;border-radius:12px;padding:40px 36px;width:300px;"
+    "box-shadow:0 8px 32px rgba(0,0,0,.4);text-align:center;}"
+    ".box h2{margin:0 0 8px;color:#1a3a5c;font-size:20px;}  "
+    ".box p{margin:0 0 24px;color:#888;font-size:13px;}"
+    "input[type=password]{width:100%;box-sizing:border-box;padding:12px 14px;"
+    "font-size:16px;border:2px solid #ddd;border-radius:8px;outline:none;}"
+    "input[type=password]:focus{border-color:#1a3a5c;}"
+    "button{margin-top:16px;width:100%;padding:12px;background:#1a3a5c;"
+    "color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;}"
+    "button:hover{background:#2c5f8a;}"
+    ".err{color:#e53935;font-size:13px;margin-top:12px;}"
+    "</style></head><body>"
+    "<div class='box'>"
+    "<h2>TNN Smart Control</h2>"
+    "<p>Nhập mật khẩu để tiếp tục</p>"
+    "<form method='POST' action='/login'>"
+    "<input type='password' name='p' placeholder='Mật khẩu' autofocus></input>"
+    "<button type='submit'>Đăng nhập</button>"
+    "</form>");
+  if (wrongPass) client.println("<div class='err'>Sai mật khẩu, thử lại.</div>");
+  client.println("</div></body></html>");
+  client.stop();
+}
 
 /* ===== SERVER ===== */
 EthernetServer server(80);
@@ -445,25 +490,6 @@ void amxReconcile() {
   }
 }
 
-/* ===== BASIC AUTH HELPER ===== */
-// Trả true nếu request chứa đúng Authorization header
-bool checkAuth(const String& req) {
-  int idx = req.indexOf("Authorization: Basic ");
-  if (idx < 0) return false;
-  int end = req.indexOf("\r\n", idx + 21);
-  String token = (end > 0) ? req.substring(idx + 21, end) : req.substring(idx + 21);
-  token.trim();
-  return token == AUTH_B64;
-}
-
-void send401(EthernetClient& client) {
-  client.println("HTTP/1.1 401 Unauthorized\r\n"
-                 "WWW-Authenticate: Basic realm=\"TNN Smart Control\"\r\n"
-                 "Content-Type: text/plain\r\n"
-                 "Connection: close\r\n");
-  client.println("401 Unauthorized");
-  client.stop();
-}
 
 /* ===== HTTP HANDLER ===== */
 void handleWebRequest(EthernetClient client) {
@@ -481,8 +507,35 @@ void handleWebRequest(EthernetClient client) {
   }
   if (!headerComplete) { client.stop(); return; }
 
-  // ===== BASIC AUTH CHECK =====
-  if (!checkAuth(request)) { send401(client); return; }
+  // ===== LOGIN (POST /login) =====
+  if (request.startsWith("POST /login")) {
+    // Đọc body (password được gửi dạng form: p=xxx)
+    String body = "";
+    unsigned long tb = millis();
+    while (millis() - tb < 300) {
+      while (client.available()) { body += (char)client.read(); }
+      if (!client.connected()) break;
+      yield();
+    }
+    int pi = body.indexOf("p=");
+    String submitted = (pi >= 0) ? body.substring(pi + 2) : "";
+    // URL decode dấu + và %xx đơn giản
+    submitted.replace("+", " ");
+    if (submitted == AUTH_PASS) {
+      // Đúng mật khẩu → set cookie, redirect về /
+      client.println("HTTP/1.1 302 Found\r\n"
+                     "Location: /\r\n"
+                     "Set-Cookie: sid=" + authToken + "; Path=/; HttpOnly\r\n"
+                     "Connection: close\r\n");
+      client.println();
+    } else {
+      serveLoginPage(client, true);
+    }
+    client.stop(); return;
+  }
+
+  // ===== COOKIE AUTH CHECK =====
+  if (!checkCookie(request)) { serveLoginPage(client, false); return; }
 
   // ===== AC TOGGLE =====
   if (request.indexOf("GET /ac/toggle?") >= 0) {
@@ -1069,6 +1122,8 @@ void setup() {
   Serial.print("IP: "); Serial.println(Ethernet.localIP());
   server.begin();
 
+  initAuthToken();
+
   // Đọc trạng thái ban đầu từ MEGA
   megaTransact("get /relay/all");
 
@@ -1076,10 +1131,11 @@ void setup() {
   amxIoConnect();
 
   // NTP sync lần đầu (retry sẽ chạy trong loop() nếu thất bại)
+  lastNtpAttempt = millis();  // tránh loop() retry ngay lập tức sau setup()
   if (ntpSync()) {
     Serial.println("NTP OK");
   } else {
-    Serial.println("NTP failed — will retry in loop()");
+    Serial.println("NTP failed — will retry in 30s");
   }
 }
 
