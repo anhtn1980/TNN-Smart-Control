@@ -28,7 +28,7 @@ const int megaPort = 9000;
 const char* amxIoIP    = "192.168.1.7";    // CE-IO4
 const char* amxRelayIP = "192.168.1.204";  // CE-REL8
 const int   amxPort    = 44197;
-#define AMX_TRANSACT_TIMEOUT_MS 400
+#define AMX_TRANSACT_TIMEOUT_MS 150
 
 /* ===== LOGO! MODBUS TCP CONFIG ===== */
 const char* logoIP = "192.168.1.6";
@@ -65,7 +65,7 @@ uint8_t       amxRelayBeforeIO  = 0;   // snapshot relay tại thời điểm IO
 #define AMX_RECONCILE_DELAY_MS 300
 
 // IO polling interval
-#define AMX_IO_POLL_INTERVAL_MS 400
+#define AMX_IO_POLL_INTERVAL_MS 600
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
