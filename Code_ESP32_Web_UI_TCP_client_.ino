@@ -43,7 +43,7 @@ const int   logoPort = 504;
 
 /* ===== AUTH (cookie-based, password only) ===== */
 // Đổi AUTH_PASS trước khi nạp firmware
-#define AUTH_PASS "tnn@2026"
+#define AUTH_PASS "123456"
 // Token ngẫu nhiên được tạo lúc boot (millis-based) — đổi mỗi lần ESP32 khởi động
 static String authToken = "";
 
