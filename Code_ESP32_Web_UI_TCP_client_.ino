@@ -271,10 +271,8 @@ void resetW5500() {
 bool megaTransact(const String &cmd) {
   EthernetClient c;
   if (!c.connect(megaIP, megaPort)) {
-    Serial.println("MEGA connect fail");
     return false;
   }
-  Serial.println("TX: " + cmd);
   c.print(cmd + "\r\n");
 
   // Đọc response line từ MEGA
@@ -354,7 +352,7 @@ bool amxMultiQuery(const char* deviceIP, const String* cmds, int numCmds,
   while (got < maxLines && millis() - t0 < AMX_TRANSACT_TIMEOUT_MS) {
     while (c.available()) {
       char ch = c.read();
-      if (ch == '\n') { if (line.length()) { Serial.print("AMX RAW: ["); Serial.print(line); Serial.println("]"); onLine(line); got++; } line = ""; }
+      if (ch == '\n') { if (line.length()) { onLine(line); got++; } line = ""; }
       else if (ch != '\r') line += ch;
     }
     yield();
@@ -369,8 +367,8 @@ void _parseAmxIoLine(const String& line) {
   int n = line.charAt(11) - '1';  // '1'→0 .. '4'→3
   if (n < 0 || n > 3) return;
   bool newVal = line.endsWith("true");
-  Serial.print("AMX IO RX: ["); Serial.print(line); Serial.println("]");
   if (bitRead(amxInputSnapshot, n) != newVal) {
+    Serial.printf("IO%d: %s\n", n + 1, newVal ? "ON" : "OFF");
     bitWrite(amxInputSnapshot, n, newVal);
     bitWrite(amxPendingToggle, n, true);   // đánh dấu kênh này cần toggle
     amxRelayBeforeIO = amxRelaySnapshot;   // ghi nhớ trạng thái relay lúc này
@@ -402,7 +400,6 @@ void amxIoPoll() {
     if (c == '\n') {
       amxIoRxBuf.trim();
       if (amxIoRxBuf.length()) {
-        Serial.print("AMX RAW: ["); Serial.print(amxIoRxBuf); Serial.println("]");
         _parseAmxIoLine(amxIoRxBuf);
         amxIoLastOk = millis();
       }
@@ -436,7 +433,6 @@ void amxSetRelay(int ch, bool val) {
 bool amxIoConnect() {
   amxIoClient.stop();
   if (!amxIoClient.connect(amxIoIP, amxPort)) {
-    Serial.println("AMX IO connect fail");
     return false;
   }
   // Set inputMode DIGITAL cho 4 port (có thể fail nếu firmware không hỗ trợ — ok)
