@@ -1,8 +1,9 @@
 #include <SPI.h>
 #include <Ethernet.h>
+#include <EthernetUdp.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.7.1"
+#define FW_VERSION "2.8.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -77,6 +78,120 @@ String         amxIoRxBuf      = "";
 unsigned long  amxIoLastOk     = 0;      // lần cuối nhận được response hợp lệ
 #define AMX_IO_RECONNECT_MS    5000      // thử kết nối lại nếu mất 5 giây
 #define AMX_IO_POLL_INTERVAL_MS 600
+
+/* ===== NTP + SCHEDULER ===== */
+// NTP server — dùng IP router nội bộ nếu router có NTP relay, hoặc pool.ntp.org
+static const char NTP_SERVER[] = "192.168.1.1";
+#define NTP_PORT          123
+#define TZ_OFFSET_SEC     25200   // UTC+7 (Việt Nam)
+#define NTP_RESYNC_MS     21600000UL  // re-sync mỗi 6 tiếng
+#define NTP_RETRY_MS      30000       // retry nếu chưa sync được
+
+// Thời điểm tắt thiết bị: 18:00 mỗi ngày
+// Thêm mốc nếu cần: {{18,0},{22,30},...}
+struct ScheduleEntry { uint8_t hour; uint8_t minute; };
+static const ScheduleEntry SCHEDULE[] = { {18, 0} };
+#define SCHEDULE_COUNT    (sizeof(SCHEDULE)/sizeof(SCHEDULE[0]))
+#define SCHEDULE_WINDOW_S 300   // chạy nếu boot lên trong vòng 5 phút sau mốc
+
+EthernetUDP ntpUdp;
+bool    ntpSynced       = false;
+unsigned long ntpEpoch  = 0;   // Unix timestamp lúc sync
+unsigned long ntpMillis = 0;   // millis() lúc sync
+unsigned long lastNtpAttempt = 0;
+
+// Theo dõi mốc nào đã kích hoạt hôm nay (bit mask theo index SCHEDULE[])
+uint8_t schedFiredToday = 0;
+int     schedLastDay    = -1;
+
+// Lấy Unix timestamp hiện tại (UTC+7)
+unsigned long nowEpochLocal() {
+  if (!ntpSynced) return 0;
+  return ntpEpoch + (millis() - ntpMillis) / 1000;
+}
+
+// Tách giờ/phút/ngày từ epoch local
+void epochToHMS(unsigned long ep, uint8_t &h, uint8_t &m, uint8_t &s, int &day) {
+  ep %= 86400UL * 36525UL;   // tránh overflow
+  day = (int)(ep / 86400);
+  unsigned long tod = ep % 86400;
+  h = tod / 3600;
+  m = (tod % 3600) / 60;
+  s = tod % 60;
+}
+
+// Gửi NTP request và đọc response — blocking tối đa 1.5s
+bool ntpSync() {
+  uint8_t buf[48];
+  memset(buf, 0, 48);
+  buf[0] = 0b11100011;  // LI=3, VN=4, Mode=3 (client)
+  buf[1] = 0; buf[2] = 6; buf[3] = 0xEC;
+  buf[12] = 49; buf[13] = 0x4E; buf[14] = 49; buf[15] = 52;
+
+  ntpUdp.begin(NTP_PORT);
+  ntpUdp.beginPacket(NTP_SERVER, NTP_PORT);
+  ntpUdp.write(buf, 48);
+  ntpUdp.endPacket();
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 1500) {
+    if (ntpUdp.parsePacket() >= 48) {
+      ntpUdp.read(buf, 48);
+      ntpUdp.stop();
+      unsigned long hi = (unsigned long)buf[40] << 24 | (unsigned long)buf[41] << 16 |
+                         (unsigned long)buf[42] << 8  | buf[43];
+      if (hi < 2208988800UL) { return false; }  // sanity check
+      ntpEpoch  = hi - 2208988800UL + TZ_OFFSET_SEC;
+      ntpMillis = millis();
+      ntpSynced = true;
+      Serial.print("NTP synced: epoch="); Serial.println(ntpEpoch);
+      return true;
+    }
+    yield();
+  }
+  ntpUdp.stop();
+  return false;
+}
+
+// Kiểm tra và chạy scheduler — gọi trong loop() mỗi giây
+void runScheduler() {
+  if (!ntpSynced) return;
+  unsigned long ep = nowEpochLocal();
+  uint8_t h, m, s; int day;
+  epochToHMS(ep, h, m, s, day);
+
+  // Reset fired flags khi sang ngày mới
+  if (day != schedLastDay) {
+    schedFiredToday = 0;
+    schedLastDay = day;
+  }
+
+  for (int i = 0; i < SCHEDULE_COUNT; i++) {
+    if (bitRead(schedFiredToday, i)) continue;
+    int schedSec = SCHEDULE[i].hour * 3600 + SCHEDULE[i].minute * 60;
+    int nowSec   = h * 3600 + m * 60 + s;
+    int diff = nowSec - schedSec;
+    // Kích hoạt nếu đúng giờ hoặc boot lên trong vòng SCHEDULE_WINDOW_S giây sau
+    if (diff >= 0 && diff <= SCHEDULE_WINDOW_S) {
+      bitSet(schedFiredToday, i);
+      Serial.printf("Scheduler fired %02d:%02d — tắt tất cả thiết bị\n",
+                    SCHEDULE[i].hour, SCHEDULE[i].minute);
+      // Tắt 16 relay MEGA (nếu có thiết bị bật)
+      if (globalStatus.indexOf("=1") >= 0)
+        megaTransact("set /system/all off");
+      // Tắt 4 relay AMX CE-REL8
+      for (int ch = 1; ch <= 4; ch++) {
+        if (bitRead(amxRelaySnapshot, ch - 1))
+          amxSetRelay(ch, false);
+      }
+      // Tắt 4 điều hòa LOGO! (nếu đang bật)
+      for (int ch = 0; ch < 4; ch++) {
+        if (bitRead(acSnapshot, ch))
+          logoSendPulse(ch);
+      }
+    }
+  }
+}
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -959,6 +1074,13 @@ void setup() {
 
   // Khởi tạo CE-IO4 inputMode
   amxIoConnect();
+
+  // NTP sync lần đầu (retry sẽ chạy trong loop() nếu thất bại)
+  if (ntpSync()) {
+    Serial.println("NTP OK");
+  } else {
+    Serial.println("NTP failed — will retry in loop()");
+  }
 }
 
 /* ===== LOOP ===== */
@@ -998,5 +1120,18 @@ void loop() {
   if (amxNeedsReconcile && millis() >= amxReconcileAfter) {
     amxNeedsReconcile = false;
     amxReconcile();
+  }
+
+  // NTP re-sync và scheduler
+  static unsigned long lastSchedCheck = 0;
+  if (millis() - lastSchedCheck >= 1000) {
+    lastSchedCheck = millis();
+    // Re-sync NTP định kỳ hoặc retry nếu chưa sync
+    unsigned long resyncInterval = ntpSynced ? NTP_RESYNC_MS : NTP_RETRY_MS;
+    if (millis() - lastNtpAttempt >= resyncInterval) {
+      lastNtpAttempt = millis();
+      ntpSync();
+    }
+    runScheduler();
   }
 }
