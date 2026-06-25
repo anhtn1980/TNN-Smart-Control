@@ -497,7 +497,7 @@ void handleWebRequest(EthernetClient client) {
 
     // Relay section
     client.println("<div class='section'><div class='section-title'>CE-REL8 — Điều khiển đèn (Relay 1-4)</div><div class='grid'>");
-    const char* amxRelayNames[] = {"Đèn 1","Đèn 2","Đèn 3","Đèn 4"};
+    const char* amxRelayNames[] = {"P.Họp","P.Tuấn","K.Doanh","H.Lang"};
     for (int i = 0; i < 4; i++) {
       client.print("<button class='relay-btn' id='R"); client.print(i+1); client.print("' onclick='toggleRelay("); client.print(i+1); client.println(")'>");
       client.println("<span class='icon'>💡</span>");
