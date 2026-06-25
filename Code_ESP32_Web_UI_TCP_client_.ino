@@ -60,11 +60,15 @@ uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
 // → Kramer chưa phản hồi → ESP32 toggle. Nếu relay đã thay đổi → Kramer đã xử lý → bỏ qua.
 bool          amxNeedsReconcile = false;
 unsigned long amxReconcileAfter = 0;
-uint8_t       amxPendingToggle  = 0;   // bit N=1: kênh N+1 cần toggle relay
-uint8_t       amxRelayBeforeIO  = 0;   // snapshot relay tại thời điểm IO vừa thay đổi
+uint8_t       amxPendingToggle  = 0;
+uint8_t       amxRelayBeforeIO  = 0;
 #define AMX_RECONCILE_DELAY_MS 300
 
-// IO polling interval
+// Persistent connection tới CE-IO4 — tránh mở/đóng socket liên tục làm cạn W5500
+EthernetClient amxIoClient;
+String         amxIoRxBuf      = "";
+unsigned long  amxIoLastOk     = 0;      // lần cuối nhận được response hợp lệ
+#define AMX_IO_RECONNECT_MS    5000      // thử kết nối lại nếu mất 5 giây
 #define AMX_IO_POLL_INTERVAL_MS 600
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
@@ -216,11 +220,35 @@ void _parseAmxRelayLine(const String& line) {
   bitWrite(amxRelaySnapshot, n, line.endsWith("true"));
 }
 
+// Gửi 4 lệnh get trên persistent connection — không mở/đóng socket.
+// Non-blocking: gửi lệnh rồi trả về ngay, response đọc ở amxIoPoll().
+void amxIoSendGet() {
+  if (!amxIoClient.connected()) return;
+  for (int i = 1; i <= 4; i++)
+    amxIoClient.print(String("get /io/") + i + "/digitalInput\n");
+}
+
+// Đọc response từ CE-IO4 — non-blocking, gọi mỗi vòng loop().
+void amxIoPoll() {
+  while (amxIoClient.available()) {
+    char c = amxIoClient.read();
+    if (c == '\n') {
+      amxIoRxBuf.trim();
+      if (amxIoRxBuf.length()) {
+        Serial.print("AMX RAW: ["); Serial.print(amxIoRxBuf); Serial.println("]");
+        _parseAmxIoLine(amxIoRxBuf);
+        amxIoLastOk = millis();
+      }
+      amxIoRxBuf = "";
+    } else if (c != '\r') {
+      amxIoRxBuf += c;
+    }
+  }
+}
+
 bool amxReadInputs() {
-  // CE-IO4: "get /io/N/digitalInput" → "update /io/N/digitalInput true|false"
-  String cmds[4];
-  for (int i = 0; i < 4; i++) cmds[i] = "get /io/" + String(i+1) + "/digitalInput";
-  return amxMultiQuery(amxIoIP, cmds, 4, _parseAmxIoLine, 4);
+  amxIoSendGet();
+  return amxIoClient.connected();
 }
 
 bool amxReadRelays() {
@@ -237,24 +265,44 @@ void amxSetRelay(int ch, bool val) {
   bitWrite(amxRelaySnapshot, ch-1, val);  // optimistic update
 }
 
-// Khởi tạo CE-IO4: set inputMode DIGITAL cho 4 port (chạy 1 lần khi setup).
-void amxIoInit() {
-  String cmds[4];
-  // Gửi mode INPUT + inputMode DIGITAL cho 4 port, đọc response để debug
-  String cmds2[8];
-  for (int i = 0; i < 4; i++) cmds2[i]   = "set /io/" + String(i+1) + "/mode INPUT";
-  for (int i = 0; i < 4; i++) cmds2[4+i] = "set /io/" + String(i+1) + "/inputMode DIGITAL";
-  amxMultiQuery(amxIoIP, cmds2, 8, _parseAmxIoLine, 8);
+// Kết nối persistent tới CE-IO4, cấu hình inputMode, seed snapshot ban đầu.
+bool amxIoConnect() {
+  amxIoClient.stop();
+  if (!amxIoClient.connect(amxIoIP, amxPort)) {
+    Serial.println("AMX IO connect fail");
+    return false;
+  }
+  // Set inputMode DIGITAL cho 4 port (có thể fail nếu firmware không hỗ trợ — ok)
+  for (int i = 1; i <= 4; i++) {
+    amxIoClient.print(String("set /io/") + i + "/mode INPUT\n");
+    amxIoClient.print(String("set /io/") + i + "/inputMode DIGITAL\n");
+  }
+  delay(200);  // chờ CE-IO4 xử lý set commands
+  while (amxIoClient.available()) amxIoClient.read();  // flush responses
 
-  // Seed amxInputSnapshot với trạng thái thật hiện tại — không trigger toggle.
-  // Nếu không seed, lần poll đầu tiên sẽ thấy 0→true là "thay đổi" và toggle relay.
-  String gets[4];
-  for (int i = 0; i < 4; i++) gets[i] = "get /io/" + String(i+1) + "/digitalInput";
-  amxNeedsReconcile = false;  // tắt cờ trước khi seed
-  amxMultiQuery(amxIoIP, gets, 4, _parseAmxIoLine, 4);
-  amxNeedsReconcile = false;  // xóa cờ do _parseAmxIoLine có thể vừa set
-  amxPendingToggle  = 0;      // không toggle gì khi mới boot
-  Serial.println("AMX IO init done");
+  // Seed: đọc trạng thái hiện tại, KHÔNG trigger toggle
+  for (int i = 1; i <= 4; i++)
+    amxIoClient.print(String("get /io/") + i + "/digitalInput\n");
+  unsigned long t0 = millis(); amxIoRxBuf = "";
+  while (millis() - t0 < 300) {
+    while (amxIoClient.available()) {
+      char c = amxIoClient.read();
+      if (c == '\n') {
+        amxIoRxBuf.trim();
+        if (amxIoRxBuf.startsWith("update /io/")) {
+          int n = amxIoRxBuf.charAt(11) - '1';
+          if (n >= 0 && n < 4) bitWrite(amxInputSnapshot, n, amxIoRxBuf.endsWith("true"));
+        }
+        amxIoRxBuf = "";
+      } else if (c != '\r') amxIoRxBuf += c;
+    }
+  }
+  amxIoRxBuf = "";
+  amxNeedsReconcile = false;
+  amxPendingToggle  = 0;
+  amxIoLastOk = millis();
+  Serial.println("AMX IO connected & seeded");
+  return true;
 }
 
 // Toggle relay khi công tắc tường thay đổi — chạy sau AMX_RECONCILE_DELAY_MS.
@@ -706,7 +754,7 @@ void setup() {
   megaTransact("get /relay/all");
 
   // Khởi tạo CE-IO4 inputMode
-  amxIoInit();
+  amxIoConnect();
 }
 
 /* ===== LOOP ===== */
@@ -728,11 +776,18 @@ void loop() {
     megaTransact("get /relay/all");
   }
 
-  // AMX CE-IO4 — poll IO state mỗi AMX_IO_POLL_INTERVAL_MS
-  static unsigned long lastIoPoll = 0;
-  if (millis() - lastIoPoll >= AMX_IO_POLL_INTERVAL_MS) {
-    lastIoPoll = millis();
-    amxReadInputs();
+  // AMX CE-IO4 — persistent connection: đọc response non-blocking mỗi vòng loop,
+  // gửi get commands mỗi AMX_IO_POLL_INTERVAL_MS. Reconnect nếu mất kết nối.
+  if (amxIoClient.connected()) {
+    amxIoPoll();  // non-blocking read
+    static unsigned long lastIoPoll = 0;
+    if (millis() - lastIoPoll >= AMX_IO_POLL_INTERVAL_MS) {
+      lastIoPoll = millis();
+      amxIoSendGet();
+    }
+  } else if (millis() - amxIoLastOk >= AMX_IO_RECONNECT_MS) {
+    amxIoLastOk = millis();
+    amxIoConnect();
   }
 
   // Reconcile IO→relay sau delay (nhường Kramer phản hồi trước)
