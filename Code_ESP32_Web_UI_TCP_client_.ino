@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.5"
+#define FW_VERSION "3.0.6"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -637,7 +637,7 @@ void handleWebRequest(EthernetClient client) {
     client.println(".io-dot{width:14px;height:14px;border-radius:50%;background:#333;margin:4px auto 0}");
     client.println(".io-indicator.active .io-dot{background:#55aaff}");
     // kios
-    client.println("#kios-page{padding:0}");
+    client.println("#kios-page{padding:0;position:relative}");
     client.println(".kios-bar{display:flex;gap:6px;padding:7px 10px;background:#111;border-bottom:1px solid #222;flex-shrink:0;flex-wrap:wrap}");
     client.println(".site-btn{padding:6px 14px;border-radius:7px;border:1px solid #335;background:#1a1a2a;color:#aad4ff;font-size:12px;font-weight:bold;cursor:pointer}");
     client.println(".site-btn.active{background:#225588;border-color:#4488cc;color:#fff}");
@@ -646,6 +646,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("#url-input{flex:1;min-width:160px;padding:5px 9px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;font-size:12px}");
     client.println(".kbtn{padding:5px 10px;border-radius:6px;color:#fff;border:none;cursor:pointer;font-size:12px}");
     client.println(".kios-frame{flex:1;width:100%;border:none;background:#fff}");
+    client.println("@keyframes spin{to{transform:rotate(360deg)}}");
     // status bar
     client.println(".sbar{font-size:10px;opacity:.4;padding:6px 12px;flex-shrink:0}");
     // clock + logout
@@ -747,7 +748,10 @@ void handleWebRequest(EthernetClient client) {
     client.println("<input id='url-input' type='text' placeholder='http://...'>");
     client.println("<button class='kbtn' style='background:#225588' onclick='kGo()'>▶ Mở</button>");
     client.println("<button class='kbtn' style='background:#333' onclick='kNewTab()'>↗ Tab</button></div>");
-    client.println("<iframe id='kf' class='kios-frame' src=''></iframe></div>");
+    client.println("<div id='kload' style='display:none;position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:10;align-items:center;justify-content:center;flex-direction:column;gap:10px'>"
+                   "<div style='width:36px;height:36px;border:3px solid #334155;border-top-color:#7dd3fc;border-radius:50%;animation:spin .8s linear infinite'></div>"
+                   "<span style='color:#94a3b8;font-size:13px'>Đang tải...</span></div>");
+    client.println("<iframe id='kf' class='kios-frame' src='' onload='kHideLoad()'></iframe></div>");
 
     // ── PAGE 4: SETTINGS ──
     client.println("<div class='page' id='p4'><div class='settings-wrap'>");
@@ -824,7 +828,8 @@ void handleWebRequest(EthernetClient client) {
     // ── KIOS logic ──
     client.println("var kSites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
     client.println("var kfr=document.getElementById('kf'),kinp=document.getElementById('url-input'),kub=document.getElementById('kurl');");
-    client.println("function kLoad(i){kfr.src=kSites[i];kub.style.display='none';[0,1].forEach(function(j){document.getElementById('kb'+j).classList.toggle('active',j===i);});}");
+    client.println("function kLoad(i){kfr.src=kSites[i];kub.style.display='none';[0,1].forEach(function(j){document.getElementById('kb'+j).classList.toggle('active',j===i);});document.getElementById('kload').style.display='flex';}");
+    client.println("function kHideLoad(){document.getElementById('kload').style.display='none';}");
     client.println("function kToggleInput(){kub.style.display=kub.style.display==='flex'?'none':'flex';if(kub.style.display==='flex')kinp.focus();}");
     client.println("function kGo(){var u=kinp.value.trim();if(!u)return;if(!u.startsWith('http'))u='http://'+u;kinp.value=u;kfr.src=u;}");
     client.println("function kNewTab(){var u=kfr.src||kinp.value.trim();if(u)window.open(u,'_blank');}");
