@@ -3,7 +3,7 @@
 #include <EthernetUdp.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.9.0"
+#define FW_VERSION "3.0.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -132,11 +132,10 @@ static const char NTP_SERVER[] = "216.239.35.0";  // time.google.com (IP cố đ
 #define NTP_RESYNC_MS     21600000UL  // re-sync mỗi 6 tiếng
 #define NTP_RETRY_MS      30000       // retry nếu chưa sync được
 
-// Thời điểm tắt thiết bị: 18:00 mỗi ngày
-// Thêm mốc nếu cần: {{18,0},{22,30},...}
+// Scheduler — có thể thay đổi qua giao diện Settings
 struct ScheduleEntry { uint8_t hour; uint8_t minute; };
-static const ScheduleEntry SCHEDULE[] = { {18, 0} };
-#define SCHEDULE_COUNT    (sizeof(SCHEDULE)/sizeof(SCHEDULE[0]))
+ScheduleEntry schedEntry = {18, 0};  // mặc định 18:00
+bool schedEnabled = true;            // bật/tắt scheduler qua UI
 #define SCHEDULE_WINDOW_S 300   // chạy nếu boot lên trong vòng 5 phút sau mốc
 
 EthernetUDP ntpUdp;
@@ -200,27 +199,20 @@ bool ntpSync() {
 
 // Kiểm tra và chạy scheduler — gọi trong loop() mỗi giây
 void runScheduler() {
-  if (!ntpSynced) return;
+  if (!ntpSynced || !schedEnabled) return;
   unsigned long ep = nowEpochLocal();
   uint8_t h, m, s; int day;
   epochToHMS(ep, h, m, s, day);
 
-  // Reset fired flags khi sang ngày mới
-  if (day != schedLastDay) {
-    schedFiredToday = 0;
-    schedLastDay = day;
-  }
+  if (day != schedLastDay) { schedFiredToday = 0; schedLastDay = day; }
 
-  for (int i = 0; i < SCHEDULE_COUNT; i++) {
-    if (bitRead(schedFiredToday, i)) continue;
-    int schedSec = SCHEDULE[i].hour * 3600 + SCHEDULE[i].minute * 60;
+  if (!bitRead(schedFiredToday, 0)) {
+    int schedSec = schedEntry.hour * 3600 + schedEntry.minute * 60;
     int nowSec   = h * 3600 + m * 60 + s;
     int diff = nowSec - schedSec;
-    // Kích hoạt nếu đúng giờ hoặc boot lên trong vòng SCHEDULE_WINDOW_S giây sau
     if (diff >= 0 && diff <= SCHEDULE_WINDOW_S) {
-      bitSet(schedFiredToday, i);
-      Serial.printf("Scheduler fired %02d:%02d — tắt tất cả thiết bị\n",
-                    SCHEDULE[i].hour, SCHEDULE[i].minute);
+      bitSet(schedFiredToday, 0);
+      Serial.printf("Scheduler fired %02d:%02d\n", schedEntry.hour, schedEntry.minute);
       // Tắt 16 relay MEGA (nếu có thiết bị bật)
       if (globalStatus.indexOf("=1") >= 0)
         megaTransact("set /system/all off");
@@ -236,6 +228,17 @@ void runScheduler() {
       }
     }
   }
+}
+
+// Helper: giờ hiện tại dạng "HH:MM:SS" (dùng cho /info và nav clock)
+String nowTimeStr() {
+  if (!ntpSynced) return "--:--:--";
+  unsigned long ep = nowEpochLocal();
+  uint8_t h, m, s; int day;
+  epochToHMS(ep, h, m, s, day);
+  char buf[9];
+  snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
+  return String(buf);
 }
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
@@ -644,6 +647,28 @@ void handleWebRequest(EthernetClient client) {
     client.println(".kios-frame{flex:1;width:100%;border:none;background:#fff}");
     // status bar
     client.println(".sbar{font-size:10px;opacity:.4;padding:6px 12px;flex-shrink:0}");
+    // clock + logout
+    client.println(".nav-right{display:flex;align-items:center;gap:2px;padding:0 6px;flex-shrink:0}");
+    client.println("#clk{font-size:11px;color:#aaa;font-family:monospace;min-width:54px;text-align:center}");
+    client.println(".logout-btn{padding:5px 8px;border-radius:6px;background:none;border:1px solid #444;color:#888;cursor:pointer;font-size:11px}");
+    client.println(".logout-btn:hover{border-color:#888;color:#fff}");
+    // settings page
+    client.println(".settings-wrap{padding:16px;max-width:400px;margin:0 auto;width:100%}");
+    client.println(".setting-card{background:#1a1a1a;border:1px solid #333;border-radius:10px;padding:16px;margin-bottom:14px}");
+    client.println(".setting-card h3{font-size:13px;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}");
+    client.println(".setting-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}");
+    client.println(".setting-row label{font-size:14px;color:#ddd}");
+    client.println(".toggle{position:relative;width:44px;height:24px}");
+    client.println(".toggle input{opacity:0;width:0;height:0}");
+    client.println(".slider{position:absolute;inset:0;background:#444;border-radius:24px;cursor:pointer;transition:.2s}");
+    client.println(".slider:before{content:'';position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}");
+    client.println(".toggle input:checked+.slider{background:#1a6a1a}");
+    client.println(".toggle input:checked+.slider:before{transform:translateX(20px)}");
+    client.println(".time-input{display:flex;gap:8px;align-items:center}");
+    client.println(".time-input input{width:58px;padding:7px;border-radius:7px;border:1px solid #444;background:#222;color:#fff;font-size:15px;text-align:center}");
+    client.println(".save-btn{width:100%;padding:12px;border-radius:8px;border:none;background:#1a4a1a;color:#fff;font-size:14px;cursor:pointer;margin-top:4px}");
+    client.println(".save-btn:hover{background:#2a6a2a}");
+    client.println(".sched-status{font-size:12px;color:#888;margin-top:8px;text-align:center}");
     client.println("</style></head><body>");
 
     // ── NAV BAR ──
@@ -652,6 +677,9 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='nav-btn' onclick='nav(1)'>❄️<br>Điều hòa</button>");
     client.println("<button class='nav-btn' onclick='nav(2)'>🧩<br>AMX</button>");
     client.println("<button class='nav-btn' onclick='nav(3)'>🖥️<br>KIOS</button>");
+    client.println("<button class='nav-btn' onclick='nav(4)'>⚙️<br>Cài đặt</button>");
+    client.println("<div class='nav-right'><span id='clk'>--:--:--</span>"
+                   "<button class='logout-btn' onclick=\"location='/logout'\">Thoát</button></div>");
     client.println("</div>");
 
     // ── PAGE 0: MEGA ──
@@ -720,14 +748,43 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='kbtn' style='background:#333' onclick='kNewTab()'>↗ Tab</button></div>");
     client.println("<iframe id='kf' class='kios-frame' src=''></iframe></div>");
 
+    // ── PAGE 4: SETTINGS ──
+    client.println("<div class='page' id='p4'><div class='settings-wrap'>");
+    client.println("<div class='setting-card'>");
+    client.println("<h3>⏰ Tự động tắt thiết bị</h3>");
+    client.println("<div class='setting-row'><label>Bật lịch tắt tự động</label>"
+                   "<label class='toggle'><input type='checkbox' id='sched-en'>"
+                   "<span class='slider'></span></label></div>");
+    client.println("<div class='setting-row'><label>Giờ tắt</label>"
+                   "<div class='time-input'>"
+                   "<input type='number' id='sched-h' min='0' max='23' placeholder='HH'>"
+                   "<span style='color:#888'>:</span>"
+                   "<input type='number' id='sched-m' min='0' max='59' placeholder='MM'>"
+                   "</div></div>");
+    client.println("<button class='save-btn' onclick='saveSched()'>💾 Lưu cài đặt</button>");
+    client.println("<div class='sched-status' id='sched-status'></div>");
+    client.println("</div>");  // setting-card
+    // Info card
+    client.println("<div class='setting-card'>");
+    client.println("<h3>ℹ️ Thông tin hệ thống</h3>");
+    client.println("<div style='font-size:13px;color:#aaa;line-height:2'>");
+    client.print("<div>Firmware: <span style='color:#7dd3fc'>"); client.print(FW_VERSION); client.println("</span></div>");
+    client.println("<div>IP: <span style='color:#7dd3fc'>192.168.1.180</span></div>");
+    client.println("<div>NTP: <span id='ntp-status' style='color:#888'>...</span></div>");
+    client.println("<div>Uptime: <span id='uptime'>...</span></div>");
+    client.println("</div></div>");  // info card
+    client.println("</div></div>");  // settings-wrap + page
+
     // ── JAVASCRIPT ──
     client.println("<script>");
     // navigation
-    client.println("var pages=4,cur=0;");
+    client.println("var pages=5,cur=0;");
     client.println("function nav(i){");
     client.println("  document.querySelectorAll('.page').forEach(function(p,j){p.classList.toggle('active',j===i);});");
     client.println("  document.querySelectorAll('.nav-btn').forEach(function(b,j){b.classList.toggle('active',j===i);});");
-    client.println("  cur=i;if(i===3&&!document.getElementById('kf').src)kLoad(0);");
+    client.println("  cur=i;");
+    client.println("  if(i===3&&!document.getElementById('kf').src)kLoad(0);");
+    client.println("  if(i===4)loadSched();");
     client.println("}");
     // info panel toggle
     client.println("function ti(n){var p=document.getElementById('i'+n);p.style.display=p.style.display==='block'?'none':'block';}");
@@ -760,12 +817,40 @@ void handleWebRequest(EthernetClient client) {
     client.println("function kReload(){kfr.src=kfr.src;}");
     client.println("kinp.addEventListener('keydown',function(e){if(e.key==='Enter')kGo();});");
 
+    // ── Clock (cập nhật mỗi giây từ /info) ──
+    client.println("function updateClock(){fetch('/info').then(function(r){return r.json();}).then(function(d){");
+    client.println("  document.getElementById('clk').innerText=d.time;");
+    client.println("  if(cur===4){");
+    client.println("    var ns=document.getElementById('ntp-status');");
+    client.println("    if(ns)ns.innerText=d.ntp?'✅ Đồng bộ':'❌ Chưa sync';");
+    client.println("    var up=document.getElementById('uptime');");
+    client.println("    if(up){var s=d.uptime,h=Math.floor(s/3600),m=Math.floor((s%3600)/60);up.innerText=h+'h '+m+'m';}");
+    client.println("  }");
+    client.println("}).catch(function(){});}");
+    client.println("setInterval(updateClock,1000);");
+
+    // ── Settings logic ──
+    client.println("function loadSched(){fetch('/settings').then(function(r){return r.json();}).then(function(d){");
+    client.println("  document.getElementById('sched-en').checked=d.enabled;");
+    client.println("  document.getElementById('sched-h').value=d.hour;");
+    client.println("  document.getElementById('sched-m').value=String(d.min).padStart(2,'0');");
+    client.println("  var s=document.getElementById('sched-status');");
+    client.println("  s.innerText=d.enabled?'Lịch BẬT — tắt lúc '+String(d.hour).padStart(2,'0')+':'+String(d.min).padStart(2,'0'):'Lịch TẮT';");
+    client.println("}).catch(function(){});}");
+    client.println("function saveSched(){");
+    client.println("  var en=document.getElementById('sched-en').checked?1:0;");
+    client.println("  var h=parseInt(document.getElementById('sched-h').value)||0;");
+    client.println("  var m=parseInt(document.getElementById('sched-m').value)||0;");
+    client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},");
+    client.println("    body:'enabled='+en+'&hour='+h+'&min='+m})");
+    client.println("  .then(function(){loadSched();document.getElementById('sched-status').innerText='✅ Đã lưu!';})");
+    client.println("  .catch(function(){document.getElementById('sched-status').innerText='❌ Lỗi lưu';});}");
+
     // ── polling master ──
-    // Chỉ poll trang đang active để tiết kiệm socket
-    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
+    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();else if(cur===4)loadSched();}");
     client.println("setInterval(masterPoll,2000);");
-    // Khởi động: load trang 0 và poll ngay
-    client.println("nav(0);pollMega();");
+    // Khởi động
+    client.println("nav(0);pollMega();updateClock();");
     client.println("</script></body></html>");
     client.stop(); return;
   }
@@ -1095,8 +1180,71 @@ void handleWebRequest(EthernetClient client) {
   }
 
   if (request.indexOf("GET /status") >= 0) {
-    // Trả cached globalStatus — được cập nhật bởi megaTransact() sau mỗi lệnh
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + globalStatus);
+    client.stop(); return;
+  }
+
+  // ===== /info =====
+  if (request.indexOf("GET /info") >= 0) {
+    unsigned long up = millis() / 1000;
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+      "{\"fw\":\"%s\",\"uptime\":%lu,\"time\":\"%s\","
+      "\"ntp\":%s,\"sched\":{\"enabled\":%s,\"hour\":%d,\"min\":%d}}",
+      FW_VERSION, up, nowTimeStr().c_str(),
+      ntpSynced ? "true" : "false",
+      schedEnabled ? "true" : "false",
+      schedEntry.hour, schedEntry.minute);
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.println(buf);
+    client.stop(); return;
+  }
+
+  // ===== /settings (GET: đọc, POST: lưu) =====
+  if (request.indexOf("/settings") >= 0) {
+    if (request.startsWith("POST /settings")) {
+      // đọc body
+      String body = "";
+      unsigned long tb = millis();
+      while (millis() - tb < 300) {
+        while (client.available()) body += (char)client.read();
+        if (!client.connected()) break;
+        yield();
+      }
+      // parse enabled=1&hour=18&min=0
+      auto getParam = [&](const String& key) -> int {
+        int idx = body.indexOf(key + "=");
+        if (idx < 0) return -1;
+        int end = body.indexOf("&", idx);
+        return (end < 0 ? body.substring(idx + key.length() + 1)
+                        : body.substring(idx + key.length() + 1, end)).toInt();
+      };
+      int en = getParam("enabled"); if (en >= 0) schedEnabled = (en == 1);
+      int hr = getParam("hour");    if (hr >= 0 && hr <= 23) schedEntry.hour = hr;
+      int mn = getParam("min");     if (mn >= 0 && mn <= 59) schedEntry.minute = mn;
+      schedFiredToday = 0;  // reset để áp dụng giờ mới ngay trong ngày
+      Serial.printf("Settings saved: sched=%s %02d:%02d\n",
+                    schedEnabled?"ON":"OFF", schedEntry.hour, schedEntry.minute);
+      client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+      client.println("{\"ok\":true}");
+    } else {
+      char buf[128];
+      snprintf(buf, sizeof(buf),
+        "{\"enabled\":%s,\"hour\":%d,\"min\":%d}",
+        schedEnabled ? "true" : "false", schedEntry.hour, schedEntry.minute);
+      client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+      client.println(buf);
+    }
+    client.stop(); return;
+  }
+
+  // ===== /logout =====
+  if (request.indexOf("GET /logout") >= 0) {
+    client.println("HTTP/1.1 302 Found\r\n"
+                   "Location: /login\r\n"
+                   "Set-Cookie: sid=; Path=/; Max-Age=0\r\n"
+                   "Connection: close\r\n");
+    client.println();
     client.stop(); return;
   }
 
