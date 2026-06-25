@@ -1,9 +1,10 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
+#include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.0"
+#define FW_VERSION "3.0.1"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -1223,6 +1224,15 @@ void handleWebRequest(EthernetClient client) {
       int hr = getParam("hour");    if (hr >= 0 && hr <= 23) schedEntry.hour = hr;
       int mn = getParam("min");     if (mn >= 0 && mn <= 59) schedEntry.minute = mn;
       schedFiredToday = 0;  // reset để áp dụng giờ mới ngay trong ngày
+      // Lưu vĩnh viễn vào flash NVS — tồn tại qua reboot
+      {
+        Preferences prefs;
+        prefs.begin("tnn", false);  // read-write
+        prefs.putBool("sched_en", schedEnabled);
+        prefs.putUChar("sched_h",  schedEntry.hour);
+        prefs.putUChar("sched_m",  schedEntry.minute);
+        prefs.end();
+      }
       Serial.printf("Settings saved: sched=%s %02d:%02d\n",
                     schedEnabled?"ON":"OFF", schedEntry.hour, schedEntry.minute);
       client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
@@ -1265,6 +1275,18 @@ void setup() {
 
   Serial.print("IP: "); Serial.println(Ethernet.localIP());
   server.begin();
+
+  // Đọc settings đã lưu từ flash (tồn tại qua reboot)
+  {
+    Preferences prefs;
+    prefs.begin("tnn", true);  // read-only
+    schedEnabled      = prefs.getBool("sched_en", true);
+    schedEntry.hour   = prefs.getUChar("sched_h", 18);
+    schedEntry.minute = prefs.getUChar("sched_m", 0);
+    prefs.end();
+    Serial.printf("Settings loaded: sched=%s %02d:%02d\n",
+                  schedEnabled ? "ON" : "OFF", schedEntry.hour, schedEntry.minute);
+  }
 
   initAuthToken();
 
