@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.5.0"
+#define FW_VERSION "2.6.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5

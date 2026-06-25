@@ -41,6 +41,58 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [2.6.0] - 2026-06-25
+Refactor giao diện sang SPA (Single Page Application) — không load lại trang khi chuyển màn hình.
+
+**Vấn đề**: Mỗi lần chuyển trang (Đèn → AMX → KIOS…) trình duyệt gửi HTTP GET mới, ESP32 phải build lại toàn bộ HTML (~800 dòng), socket W5500 mở/đóng liên tục. Trên kiosk không có nút Refresh, khi W5500 hết socket (TIME_WAIT tích lũy) toàn bộ giao diện mất luôn.
+
+**Giải pháp**: Một route GET / duy nhất trả về toàn bộ HTML gồm 4 trang con (Đèn / Điều hòa / AMX / KIOS) ẩn bằng CSS (`display:none`). Nav bar 4 tab JS show/hide trang mà không cần HTTP request mới. `masterPoll()` chỉ fetch API của tab đang mở mỗi 2s — không poll mù cả 4 trang.
+
+- Gộp 5 route HTML (/, /mega, /modbus, /amx, /kios) thành 1 route SPA duy nhất.
+- Nav bar cố định đầu trang: **Đèn · Điều hòa · AMX · KIOS**.
+- CSS `.page.active{display:flex}` — chuyển tab tức thì, không round-trip mạng.
+- `masterPoll()`: `cur===0` → `pollMega()`, `cur===1` → `pollAC()`, `cur===2` → `pollAMX()` (KIOS không poll).
+- KIOS tab: iframe nhúng với thanh địa chỉ, nút Tải lại và Mở tab mới.
+- Fix lỗi biên dịch: xóa `kinp &&` thừa trước `client.println(...)`.
+- Giữ nguyên toàn bộ API endpoint (/cmd, /status, /ac/toggle, /ac/status, /amx/relay, /amx/status).
+
+### [2.5.0] - 2026-06-24
+AMX CE-IO4: chuyển từ connect-per-transaction sang persistent connection, fix relay flicker khi boot.
+
+- `amxIoConnect()`: kết nối bền vững tới CE-IO4, gửi `set /io/N/mode INPUT` + `set /io/N/inputMode DIGITAL` khi kết nối, seed `amxInputSnapshot` bằng cách đọc trạng thái thật trước khi bật toggle logic — tránh relay nháy khi ESP32 khởi động.
+- `amxIoPoll()`: đọc response non-blocking mỗi vòng `loop()`.
+- `amxIoSendGet()`: gửi 4 lệnh `get /io/N/digitalInput` trên persistent connection mỗi 600ms.
+- Auto-reconnect CE-IO4 sau 5s nếu mất kết nối.
+- Giải quyết ERR_CONNECTION_REFUSED: CE-IO4 mở socket mỗi 600ms tích lũy TIME_WAIT → socket W5500 cạn. Persistent connection loại bỏ hoàn toàn vòng lặp mở/đóng.
+
+### [2.4.0] - 2026-06-24
+AMX toggle logic: bấm công tắc tường → toggle relay (không map 1:1 trạng thái).
+
+- `amxReconcile()`: sau 300ms, đọc relay thật → nếu relay chưa đổi (Kramer chưa xử lý) thì ESP32 toggle; nếu relay đã đổi (Kramer xử lý trước) thì bỏ qua.
+- `amxPendingToggle`, `amxRelayBeforeIO`: tracking bit mask để biết kênh nào đang chờ reconcile.
+- Tên nút relay AMX cập nhật: P.Họp / P.Tuấn / K.Doanh / H.Lang.
+
+### [2.3.0] - 2026-06-24
+AMX CE-IO4 polling: switch từ Subscribe → polling `get` mỗi 600ms.
+
+- CE-IO4 firmware thực tế trả lỗi `"unknown path"` với lệnh `Subscribe` → chuyển sang polling `get /io/N/digitalInput` trên persistent connection.
+- Fix IP CE-IO4: 192.168.1.7 (trước đó nhầm dùng 192.168.1.203 là CE-IRS4).
+- `_parseAmxIoLine()`: parse `update /io/N/digitalInput true|false`, phát hiện thay đổi trạng thái, kích hoạt reconcile logic.
+
+### [2.2.0] - 2026-06-24
+AMX CE-IO4/CE-REL8 tích hợp ban đầu.
+
+- Route `/amx/status`: poll CE-IO4 (4 digital input) + CE-REL8 (4 relay), trả JSON `{"relay":[...],"io":[...]}`.
+- Route `/amx/relay?ch=N&value=true|false`: set relay CE-REL8 kênh N qua TCP AMX protocol.
+- UI /amx: 4 nút relay đèn + 4 chỉ thị trạng thái công tắc tường IO1-IO4.
+- Fix lỗi biên dịch `amxMirrorBlockUntil`: xóa tham chiếu stale sau refactor v2.0.0.
+
+### [2.1.0] - 2026-06-24
+Thêm trang KIOS và route /kios.
+
+- Trang /kios: iframe nhúng KC-Brain, SL-240C, URL tùy chọn.
+- Menu chính: thêm nút KIOS.
+
 ### [2.0.0] - 2026-06-24
 Thay doi kien truc: bo megaClient persistent, dung connect-per-transaction cho MEGA (giong LOGO!). Giai quyet dut diem van de RECONNECTED OK loop. Chi tiet trong file.
 

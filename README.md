@@ -1,185 +1,166 @@
 # TNN Smart Control
 
-Hệ thống điều khiển relay qua mạng LAN gồm 2 tầng:
-
-- **ESP32 + W5500**: cung cấp Web UI/API cho người dùng và chuyển lệnh TCP.
-- **Arduino MEGA2560 + W5500 + MAX485/RS485**: nhận lệnh TCP, điều khiển relay qua RS485, đồng bộ trạng thái I/O.
+Hệ thống điều khiển đèn và điều hòa không khí qua mạng LAN nội bộ, hỗ trợ PC và điện thoại, không phụ thuộc WiFi.
 
 ---
 
-## 1) Kiến trúc tổng quan
+## 1. Kiến trúc tổng quan
 
-```text
-[Điện thoại/PC]
-      |
-   HTTP (Web UI/API)
-      |
-[ESP32 + W5500]  --- TCP:9000 ---> [MEGA2560 + W5500 + MAX485] --- RS485 ---> [Board relay 16 kênh]
+```
+[PC / Điện thoại / Kiosk]
+           │
+        HTTP :80
+           │
+   [ESP32 + W5500]  192.168.1.180  ← Web server, SPA UI, HTTP API gateway
+     │        │         │               │
+  TCP:9000  Modbus   TCP:44197       TCP:44197
+     │      TCP:504      │               │
+[MEGA2560] [LOGO!8]  [CE-IO4]       [CE-REL8]
+192.168.1.178  .6      .7             .204
+     │
+  RS485 9600
+     │
+[Board relay 16 kênh]
 ```
 
-### Vai trò từng thiết bị
-
-- **ESP32**
-  - Chạy web server cổng `80`.
-  - Cung cấp giao diện điều khiển relay 1–16.
-  - Gửi lệnh TCP dạng text sang MEGA (`set /relay/x/toggle`, `set /system/all off`, `get /relay/all`).
-  - Nhận trạng thái relay từ MEGA để cập nhật UI.
-
-- **MEGA2560**
-  - Chạy TCP server cổng `9000`.
-  - Parse lệnh text và gửi frame RS485 tương ứng.
-  - Đọc trạng thái input/output định kỳ từ module RS485.
-  - Hỗ trợ scene switch bằng nút cứng (`SCENE_PIN`).
+| Thiết bị | IP | Vai trò |
+|---|---|---|
+| ESP32 + W5500 | 192.168.1.180 | Web server port 80, SPA UI (v2.6.0) |
+| MEGA2560 + W5500 | 192.168.1.178 | TCP server :9000, 16 relay RS485 (v1.5.0) |
+| LOGO! 8 0BA8 | 192.168.1.6 | Modbus TCP :504, 4 điều hòa |
+| AMX CE-IO4 | 192.168.1.7 | TCP :44197, 4 công tắc tường (input) |
+| AMX CE-REL8 | 192.168.1.204 | TCP :44197, 4 relay đèn (output) |
+| AMX CE-IRS4 | 192.168.1.203 | TCP :44197, cảm biến IR (dự phòng) |
 
 ---
 
-## 2) Cấu trúc file chính
+## 2. Giao diện web
 
-- `Code_ESP32_Web_UI_TCP_client_.ino`
-  - Firmware cho ESP32 (Web UI + TCP client).
+Truy cập `http://192.168.1.180` từ bất kỳ thiết bị nào trên LAN.
 
-- `Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino`
-  - Firmware cho Arduino MEGA2560 (TCP server + RS485 control).
+Giao diện SPA (Single Page Application) gồm 4 tab, chuyển tab không cần tải lại trang:
+
+| Tab | Nội dung |
+|---|---|
+| **Đèn** | 16 relay đèn (MEGA2560), nút TẮT TẤT CẢ |
+| **Điều hòa** | 4 điều hòa (LOGO! 8), nút bật/tắt từng máy |
+| **AMX** | 4 relay đèn CE-REL8 + trạng thái 4 công tắc tường CE-IO4 |
+| **KIOS** | Iframe nhúng KC-Brain, SL-240C hoặc URL tùy chọn |
 
 ---
 
-## 3) Thông số mạng mặc định
+## 3. Cấu hình mạng
 
-### ESP32
-
+### ESP32 (Web server)
 - IP tĩnh: `192.168.1.180`
-- Gateway: `192.168.1.1`
-- Subnet: `255.255.255.0`
-- DNS: `8.8.8.8`
+- Gateway: `192.168.1.1` — Subnet: `255.255.255.0`
 - Web server: port `80`
-- TCP client target: `192.168.1.178:9000`
 
-### MEGA2560
-
+### MEGA2560 (RS485 Controller)
 - IP tĩnh: `192.168.1.178`
-- Gateway: `192.168.1.1`
-- Subnet: `255.255.255.0`
 - TCP server: port `9000`
 
-> Điều chỉnh dải IP cho phù hợp router/mạng LAN thực tế trước khi triển khai.
+### LOGO! 8 (Điều hòa)
+- IP tĩnh: `192.168.1.6`
+- Modbus TCP: port `504`
+- Web UI: `http://192.168.1.6/webroot/main.htm` — User: `Web User`, Pass: `123456`
 
 ---
 
-## 4) API và protocol lệnh
+## 4. HTTP API
 
-### HTTP endpoint trên ESP32
+| Endpoint | Mô tả |
+|---|---|
+| `GET /` | Trang SPA chính (HTML đầy đủ) |
+| `GET /cmd?c=<lệnh>` | Gửi lệnh text tới MEGA (relay, all-off) |
+| `GET /status` | Trạng thái 16 relay: `L1=0,L2=1,...,L16=0` |
+| `GET /ac/toggle?ch=N` | Toggle điều hòa N (1-4) |
+| `GET /ac/status` | JSON trạng thái 4 điều hòa |
+| `GET /amx/relay?ch=N&value=true\|false` | Đặt relay CE-REL8 kênh N |
+| `GET /amx/status` | JSON: `{"relay":[...],"io":[...]}` CE-REL8 + CE-IO4 |
 
-- `GET /`
-  - Trả về Web UI điều khiển.
-
-- `GET /cmd?c=<command>`
-  - Gửi trực tiếp chuỗi lệnh sang MEGA qua TCP.
-  - Ví dụ:
-    - `/cmd?c=set%20/relay/1/toggle`
-    - `/cmd?c=set%20/system/all%20off`
-
-- `GET /set?relay=<n>&value=<true|false|1|0>`
-  - Đặt trạng thái relay theo số kênh.
-  - Ví dụ: `/set?relay=3&value=true`
-
-- `GET /status`
-  - Trả text trạng thái dạng: `L1=0,L2=1,...,L16=0`
-
-- `GET /api/status`
-  - Trả JSON: `{"raw":"L1=0,..."}`
-
-### Lệnh TCP text mà MEGA hỗ trợ
-
-- `set /relay/<1..16>/toggle`
-- `set /relay/<1..16>/state true|false`
+### Lệnh MEGA (`/cmd?c=<lệnh>`)
+- `set /relay/<1-16>/state true|false`
+- `set /relay/<1-16>/toggle`
 - `set /system/all off`
-- `get /relay/all`
 
 ---
 
-## 5) Luồng hoạt động
+## 5. Thư viện Arduino
 
-1. Người dùng mở web tại `http://192.168.1.180/`.
-2. Nhấn nút relay trên UI.
-3. ESP32 gửi lệnh TCP sang MEGA.
-4. MEGA gửi frame RS485 để toggle relay tương ứng.
-5. MEGA cập nhật snapshot I/O, trả trạng thái về client TCP.
-6. ESP32 polling `/status` để hiển thị trạng thái thực tế trên UI.
+| Board | Thư viện |
+|---|---|
+| ESP32 | `Ethernet` (chuẩn, không dùng Ethernet2) |
+| MEGA2560 | `Ethernet2` (cho W5500) |
 
 ---
 
-## 6) Hướng dẫn nạp firmware
-
-## Yêu cầu phần cứng
-
-- 01 x ESP32 + module W5500
-- 01 x Arduino MEGA2560 + module W5500
-- 01 x MAX485 (hoặc transceiver RS485 tương đương)
-- Board relay RS485 16 kênh tương thích frame điều khiển hiện có
-- Nguồn cấp phù hợp cho tất cả thiết bị
-
-## Thư viện Arduino
-
-- ESP32 sketch:
-  - `SPI`
-  - `Ethernet`
-
-- MEGA sketch:
-  - `SPI`
-  - `Ethernet2`
-
-> Cài đúng thư viện Ethernet tương ứng từng sketch để tránh xung đột.
-
-## Các bước
+## 6. Nạp firmware
 
 1. Mở `Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino` trong Arduino IDE.
-2. Chọn board **Arduino Mega or Mega 2560** và đúng COM port.
-3. Build & Upload cho MEGA.
-4. Mở `Code_ESP32_Web_UI_TCP_client_.ino`.
-5. Chọn board ESP32 phù hợp và COM port.
-6. Build & Upload cho ESP32.
-7. Kết nối dây mạng LAN cho cả ESP32 và MEGA.
-8. Truy cập `http://192.168.1.180` để kiểm tra.
+2. Chọn board **Arduino Mega or Mega 2560**, đúng COM port → Upload.
+3. Mở `Code_ESP32_Web_UI_TCP_client_.ino`.
+4. Chọn board ESP32 phù hợp, đúng COM port → Upload.
+5. Kết nối dây LAN cho cả 2 board.
+6. Truy cập `http://192.168.1.180` để kiểm tra.
 
 ---
 
-## 7) Mapping chân (theo code hiện tại)
+## 7. Mapping chân
 
-## ESP32 (W5500)
+### ESP32 (W5500)
+| Tín hiệu | GPIO |
+|---|---|
+| W5500 CS | 5 |
+| W5500 RST | 4 |
+| SPI SCK | 18 |
+| SPI MISO | 19 |
+| SPI MOSI | 23 |
 
-- `W5500_CS = 5`
-- `W5500_RST = 4`
-- `SPI_SCK = 18`
-- `SPI_MISO = 19`
-- `SPI_MOSI = 23`
-
-## MEGA2560
-
-- `DE_PIN = 22` (điều khiển TX/RX MAX485)
-- `RS485 = Serial1`
-- `SCENE_PIN = 30` (nút scene, `INPUT_PULLUP`)
-
----
-
-## 8) Lưu ý vận hành
-
-- ESP32 có cơ chế reconnect TCP tới MEGA mỗi ~3 giây khi mất kết nối.
-- Cơ chế `mirrorBlockUntil` trên MEGA giúp tránh phản hồi chéo ngay sau thao tác relay.
-- Nút **AC** trên UI ESP32 đang gửi lệnh `set /ac/x/pulse`; nếu MEGA chưa triển khai parser `/ac/` thì lệnh này sẽ không có tác dụng.
+### MEGA2560
+| Tín hiệu | Pin |
+|---|---|
+| RS485 DE/RE | 22 |
+| RS485 Serial | Serial1 |
+| Scene switch | 30 (INPUT_PULLUP) |
 
 ---
 
-## 9) Gợi ý cải tiến tiếp theo
+## 8. Lưu ý vận hành
 
-- Chuẩn hóa parser HTTP/URL decode đầy đủ trên ESP32.
-- Bổ sung xác thực CRC frame RS485 khi đọc response.
-- Triển khai timeout client TCP (`CLIENT_TIMEOUT`) đầy đủ trên MEGA.
-- Bổ sung logging có cấu trúc để debug nhanh trong thực địa.
-- Tách protocol command sang module riêng để dễ mở rộng.
+- **W5500 chỉ có 8 socket phần cứng** — giao diện SPA (v2.6.0) tránh mở socket mới khi chuyển tab.
+- **CE-IO4 persistent connection** — tránh tích lũy TIME_WAIT, không còn ERR_CONNECTION_REFUSED.
+- **Relay không nháy khi ESP32 boot** — firmware đọc trạng thái thực tế công tắc tường trước khi bật toggle logic.
+- **LOGO! không giữ idle TCP** — ESP32 dùng connect-per-transaction (mở→gửi→đóng mỗi lần).
+- **AMX toggle logic**: bấm công tắc tường → toggle relay, không map 1:1 trạng thái. Kramer và ESP32 cùng listen nhưng chỉ 1 bên xử lý (ESP32 nhường 300ms).
+- **Scene switch MEGA** (nút cứng pin 30): có đèn đang bật → tắt hết; tất cả tắt → bật kênh 12 (Kế Toán).
 
 ---
 
-## 10) Bản quyền & liên hệ
+## 9. Lịch sử version
 
-Tài liệu này được tạo để phục vụ vận hành nội bộ dự án **TNN Smart Control**.
-Bạn có thể bổ sung thông tin tác giả/đơn vị vận hành tại mục này.
+| Version | Mô tả |
+|---|---|
+| ESP32 v2.6.0 | SPA refactor — không reload trang, giải quyết ERR_CONNECTION_REFUSED trên kiosk |
+| ESP32 v2.5.0 | CE-IO4 persistent connection, seed IO snapshot, relay không nháy khi boot |
+| ESP32 v2.4.0 | AMX toggle logic, Kramer co-existence, tên relay P.Họp/P.Tuấn/K.Doanh/H.Lang |
+| ESP32 v2.3.0 | CE-IO4 polling `get`, fix IP 192.168.1.7 |
+| ESP32 v2.0.0 | Connect-per-transaction cho MEGA, giải quyết RECONNECTED OK loop |
+| MEGA v1.5.0 | Rollback `waitForBytes()` → `delay(60)` cố định, mirror công tắc vật lý hoạt động đúng |
+
+Xem `Changelog.md` để biết chi tiết từng thay đổi.
+
+---
+
+## 10. Tài liệu liên quan
+
+- `DESIGN.md` — Kiến trúc chi tiết, quyết định thiết kế, lịch sử lỗi
+- `Changelog.md` — Log thay đổi đầy đủ từng version
+- `HuongDanSuDung.doc` — Hướng dẫn sử dụng cho người dùng cuối
+
+---
+
+## 11. Bản quyền & liên hệ
+
+Tài liệu phục vụ vận hành nội bộ dự án **TNN Smart Control — TNN SI**.
+Website: [www.tnnsi.vn](http://www.tnnsi.vn)

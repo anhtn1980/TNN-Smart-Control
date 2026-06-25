@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v2.5.x — 2026-06-24
+> Lần cập nhật gần nhất: v2.6.0 — 2026-06-25
 
 ---
 
@@ -43,7 +43,7 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 | Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v2.5.x / 192.168.1.180 |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v2.6.0 / 192.168.1.180 |
 | MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
 | LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
 | AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |
@@ -86,13 +86,18 @@ kết nối nào để drop.
 
 ### 3.2 HTTP Routes
 
+#### HTML (SPA — v2.6.0)
+
 | Route | Mô tả |
 |---|---|
-| `GET /` | Menu chính — điều hướng các trang |
-| `GET /mega` | Trang 16 relay điều khiển đèn (MEGA2560) |
-| `GET /modbus` | Trang 4 điều hòa (LOGO! 8 Modbus TCP) |
-| `GET /amx` | Trang AMX: 4 relay đèn (CE-REL8) + 4 công tắc tường (CE-IO4) |
-| `GET /kios` | Trang nhúng web 3rd-party (KC-Brain, SL-240C, URL tùy chọn) |
+| `GET /` | **SPA duy nhất** — trả toàn bộ HTML gồm 4 trang con (Đèn / Điều hòa / AMX / KIOS). Chuyển tab bằng JS, không gửi HTTP request mới. |
+
+Trước v2.6.0 có 5 route riêng: `GET /`, `/mega`, `/modbus`, `/amx`, `/kios` — đã gộp vào SPA để tránh socket W5500 cạn khi chuyển trang liên tục (đặc biệt trên kiosk).
+
+#### API (giữ nguyên qua các version)
+
+| Route | Mô tả |
+|---|---|
 | `GET /cmd?c=<lệnh>` | Gửi lệnh tới MEGA qua `megaTransact()` |
 | `GET /status` | Trả cached `globalStatus` (L1=0,...,L16=0) |
 | `GET /ac/toggle?ch=N` | Toggle điều hòa N (1-4) qua LOGO! pulse pattern |
@@ -100,7 +105,30 @@ kết nối nào để drop.
 | `GET /amx/relay?ch=N&value=true\|false` | Set relay CE-REL8 kênh N |
 | `GET /amx/status` | JSON: `{"relay":[...],"io":[...]}` trạng thái CE-REL8 + CE-IO4 |
 
-### 3.3 JavaScript UI (trang /mega)
+### 3.3 SPA Architecture (v2.6.0)
+
+```
+GET / → ESP32 trả một HTML duy nhất (~900 dòng)
+         ┌──────────────────────────────────────────────┐
+         │  Nav bar: [Đèn] [Điều hòa] [AMX] [KIOS]     │
+         │  <div id="p0" class="page active"> … </div>  │  ← Đèn (MEGA 16 relay)
+         │  <div id="p1" class="page">        … </div>  │  ← Điều hòa (LOGO! AC)
+         │  <div id="p2" class="page">        … </div>  │  ← AMX (CE-REL8 + CE-IO4)
+         │  <div id="p3" class="page">        … </div>  │  ← KIOS (iframe browser)
+         └──────────────────────────────────────────────┘
+
+showPage(n) → ẩn trang cũ, hiện trang n (chỉ thay CSS, không fetch HTTP)
+
+masterPoll() mỗi 2s:
+  cur===0 → pollMega()     → GET /status
+  cur===1 → pollAC()       → GET /ac/status
+  cur===2 → pollAMX()      → GET /amx/status
+  cur===3 → (không poll)   ← KIOS dùng iframe tự quản lý
+```
+
+**Lợi ích**: Không mở socket mới khi chuyển tab → giải quyết triệt để ERR_CONNECTION_REFUSED trên kiosk fullscreen.
+
+### 3.4 JavaScript UI (trang Đèn)
 
 **Vấn đề**: Bấm 2 lần nhanh liên tiếp → 2 lần tự triệt tiêu (v1.3.0).
 
@@ -112,7 +140,7 @@ cho từng nút. Mỗi lần bấm: đọc `pendingTarget[key]` (không đọc D
 ghi lại, gửi lệnh. `applyStatus()` đồng bộ `pendingTarget` theo trạng thái
 thật khi nhận data từ server.
 
-### 3.4 Cấu hình mạng ESP32
+### 3.5 Cấu hình mạng ESP32
 
 ```
 IP tĩnh : 192.168.1.180
@@ -279,9 +307,11 @@ CE-IO4 thay đổi trạng thái (bất kể bật→tắt hay tắt→bật)
 
 **Web button**: Gọi `set /relay/N/state` trực tiếp → không tạo IO change event → không ảnh hưởng logic toggle.
 
-### 6.4 Kết nối connect-per-transaction
+### 6.4 Kết nối: CE-IO4 persistent, CE-REL8 per-transaction
 
-Giống MEGA và LOGO!, AMX dùng `amxMultiQuery()`: mở TCP → gửi N lệnh → đọc tối đa N dòng response → đóng. Không giữ persistent connection trừ trường hợp đặc biệt.
+**CE-IO4 (công tắc tường)**: Persistent connection — `amxIoClient` giữ kết nối liên tục, `amxIoPoll()` đọc non-blocking mỗi vòng `loop()`. Auto-reconnect sau 5s nếu mất kết nối. Lý do: CE-IO4 cần polling 600ms liên tục; mỗi lần connect-per-transaction tích lũy TIME_WAIT → W5500 hết socket.
+
+**CE-REL8 (relay)**: Connect-per-transaction — `amxReadRelays()` và `amxSetRelay()` mở kết nối mới mỗi lần. CE-REL8 chỉ được gọi khi người dùng bấm nút hoặc reconcile, không cần polling liên tục.
 
 ---
 
@@ -316,9 +346,11 @@ Những thay đổi đã thử và gây ra vấn đề nghiêm trọng:
 ## 9. Cấu trúc file & version hiện tại
 
 ```
-Code_ESP32_Web_UI_TCP_client_.ino              v2.5.x   ESP32 Web server + gateway
+Code_ESP32_Web_UI_TCP_client_.ino              v2.6.0   ESP32 Web server + SPA gateway
 Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino     v1.5.0   MEGA RS485 controller
-DESIGN.md                                               File này
+DESIGN.md                                               Tài liệu kiến trúc (file này)
+Changelog.md                                            Lịch sử thay đổi tất cả firmware
+README.md                                               Hướng dẫn cài đặt & vận hành
 HuongDanSuDung.doc                                      Hướng dẫn sử dụng người dùng cuối
 ```
 
@@ -334,19 +366,22 @@ HuongDanSuDung.doc                                      Hướng dẫn sử dụ
 ## 10. Tình trạng phát triển hiện tại
 
 ### Đã hoàn thiện ✅
-- 16 relay điều khiển đèn qua UI web + công tắc vật lý + scene switch (MEGA)
-- Nút bấm dồn dập nhanh hoạt động đúng (v2.0.0)
-- "TẮT TẤT CẢ" đồng bộ UI đúng
-- Menu: / → /mega, /modbus, /amx, /kios
-- /modbus: điều khiển 4 điều hòa qua LOGO! 8 Modbus TCP (pulse pattern)
-- /amx: CE-REL8 4 relay + CE-IO4 4 công tắc tường, polling 800ms
-- /amx toggle logic: IO thay đổi → toggle relay (không map 1-1 trạng thái)
-- /amx Kramer co-existence: ESP32 nhường 500ms, chỉ toggle nếu Kramer chưa làm
-- /kios: nhúng web KC-Brain, SL-240C, URL tùy chọn
+- 16 relay điều khiển đèn qua UI web + công tắc vật lý + scene switch (MEGA) — v1.5.0
+- Nút bấm dồn dập nhanh hoạt động đúng, connect-per-transaction — v2.0.0
+- "TẮT TẤT CẢ" đồng bộ UI đúng — v1.3.0 (MEGA)
+- Điều khiển 4 điều hòa qua LOGO! 8 Modbus TCP (pulse pattern) — v1.8.x / v2.x
+- AMX CE-REL8 4 relay + CE-IO4 4 công tắc tường, polling 600ms — v2.3.0+
+- AMX toggle logic: IO thay đổi → toggle relay (không map 1-1 trạng thái) — v2.4.0
+- AMX Kramer co-existence: ESP32 nhường 300ms, chỉ toggle nếu Kramer chưa làm — v2.4.0
+- CE-IO4 persistent connection, tránh TIME_WAIT, không còn ERR_CONNECTION_REFUSED — v2.5.0
+- Relay không nháy khi ESP32 khởi động (seed IO snapshot trước khi bật toggle) — v2.5.0
+- Tên nút relay AMX: P.Họp / P.Tuấn / K.Doanh / H.Lang — v2.4.0
+- SPA: không load lại trang khi chuyển tab, không còn mất giao diện trên kiosk — v2.6.0
+- KIOS iframe browser với thanh địa chỉ, Tải lại, Mở tab mới — v2.6.0
 
 ### Còn hạn chế / chưa xác nhận 🔲
-- CE-IO4: `Subscribe` path không hoạt động → polling `get` mỗi 800ms (độ trễ tối đa 800ms)
-- CE-IO4: `set /io/N/inputMode DIGITAL` qua TCP chưa xác nhận — nếu lỗi cần cấu hình thủ công tại `http://192.168.1.7`
+- CE-IO4: `Subscribe` path không hoạt động (firmware CE-IO4 thực tế) → polling `get` mỗi 600ms (độ trễ tối đa 600ms)
+- CE-IO4: `set /io/N/inputMode DIGITAL` qua TCP chưa xác nhận hoàn toàn — nếu lỗi cần cấu hình thủ công tại `http://192.168.1.7`
 - Timeout client TCP trên MEGA (`CLIENT_TIMEOUT = 10000` định nghĩa nhưng chưa dùng)
 - Xác thực CRC cho RS485 frame
 

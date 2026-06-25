@@ -1,258 +1,156 @@
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
-      xmlns:w="urn:schemas-microsoft-com:office:word"
-      xmlns="http://www.w3.org/TR/REC-html40">
+<html xmlns:o='urn:schemas-microsoft-com:office:office'
+      xmlns:w='urn:schemas-microsoft-com:office:word'
+      xmlns='http://www.w3.org/TR/REC-html40'>
 <head>
 <meta charset="UTF-8">
-<meta name=ProgId content=Word.Document>
-<meta name=Generator content="Microsoft Word">
+<title>Hướng dẫn sử dụng — TNN Smart Control</title>
 <style>
-  body { font-family: Arial, sans-serif; font-size: 12pt; color: #222; margin: 2cm; line-height: 1.6; }
-  h1 { font-size: 20pt; color: #1a3a6b; text-align: center; border-bottom: 2px solid #1a3a6b; padding-bottom: 6pt; }
-  h2 { font-size: 14pt; color: #1a3a6b; margin-top: 18pt; border-left: 4pt solid #1a3a6b; padding-left: 8pt; }
-  h3 { font-size: 12pt; color: #2a5a9b; margin-top: 12pt; }
-  table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
-  td, th { border: 1pt solid #aaa; padding: 5pt 8pt; font-size: 11pt; }
-  th { background-color: #1a3a6b; color: white; font-weight: bold; }
-  tr:nth-child(even) td { background-color: #f2f5fb; }
-  .note { background: #fffbe6; border-left: 4pt solid #f0b400; padding: 6pt 10pt; margin: 8pt 0; font-size: 11pt; }
-  .warn { background: #fff0f0; border-left: 4pt solid #cc2200; padding: 6pt 10pt; margin: 8pt 0; font-size: 11pt; }
-  .tip  { background: #f0fff4; border-left: 4pt solid #22aa44; padding: 6pt 10pt; margin: 8pt 0; font-size: 11pt; }
-  .center { text-align: center; }
-  .sub { color: #666; font-size: 10pt; }
-  ul, ol { margin: 4pt 0 8pt 20pt; }
-  li { margin-bottom: 4pt; }
-  code { background: #f0f0f0; padding: 1pt 4pt; font-family: Courier New; font-size: 10pt; border-radius: 2pt; }
-  .pagebreak { page-break-before: always; }
-  .logo-box { text-align: center; margin: 20pt 0; }
-  .logo-box .brand { font-size: 24pt; font-weight: bold; color: #1a3a6b; letter-spacing: 2pt; }
-  .logo-box .sub2 { font-size: 11pt; color: #555; margin-top: 4pt; }
-  .version-box { border: 1pt solid #ccc; padding: 8pt 16pt; display: inline-block; margin-top: 12pt; font-size: 10pt; color: #666; }
+  body { font-family: Arial, sans-serif; font-size: 12pt; margin: 2cm; color: #222; }
+  h1 { font-size: 18pt; color: #1a3a5c; border-bottom: 2px solid #1a3a5c; padding-bottom: 6px; }
+  h2 { font-size: 14pt; color: #1a3a5c; margin-top: 20px; }
+  h3 { font-size: 12pt; color: #2c5f8a; margin-top: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  th { background: #1a3a5c; color: white; padding: 6px 10px; text-align: left; }
+  td { border: 1px solid #ccc; padding: 5px 10px; }
+  tr:nth-child(even) td { background: #f5f8fc; }
+  .note { background: #fff8e1; border-left: 4px solid #f0a500; padding: 8px 12px; margin: 10px 0; }
+  .tip  { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 8px 12px; margin: 10px 0; }
+  .warn { background: #fdecea; border-left: 4px solid #e53935; padding: 8px 12px; margin: 10px 0; }
+  code { background: #f0f0f0; padding: 1px 4px; font-family: Consolas, monospace; font-size: 11pt; }
+  ul li, ol li { margin-bottom: 4px; }
+  .version { font-size: 10pt; color: #666; }
 </style>
 </head>
 <body>
 
-<div class="logo-box">
-  <div class="brand">TNN SMART CONTROL</div>
-  <div class="sub2">Hệ thống điều khiển thông minh văn phòng TNN SI</div>
-  <div class="version-box">
-    Phiên bản firmware: ESP32 v2.5.x &nbsp;|&nbsp; MEGA v1.5.0<br>
-    Cập nhật: Tháng 6/2026 &nbsp;|&nbsp; www.tnnsi.vn
-  </div>
-</div>
-
-<h1>HƯỚNG DẪN SỬ DỤNG</h1>
-
-<p class="center sub">Tài liệu dành cho người dùng cuối và kỹ thuật viên vận hành</p>
+<h1>Hướng dẫn sử dụng — TNN Smart Control</h1>
+<p class="version">Phiên bản: ESP32 v2.6.0 | Ngày: 25/06/2026 | TNN SI — www.tnnsi.vn</p>
 
 <hr>
 
-<h2>1. Tổng quan hệ thống</h2>
+<h2>Mục lục</h2>
+<ol>
+  <li>Giới thiệu hệ thống</li>
+  <li>Truy cập giao diện</li>
+  <li>Điều khiển đèn (tab Đèn)</li>
+  <li>Điều khiển điều hòa (tab Điều hòa)</li>
+  <li>Điều khiển AMX (tab AMX)</li>
+  <li>Màn hình KIOS (tab KIOS)</li>
+  <li>Xử lý sự cố thường gặp</li>
+  <li>Thông tin kỹ thuật (dành cho kỹ thuật viên)</li>
+</ol>
 
-<p>TNN Smart Control là hệ thống điều khiển đèn và điều hòa không khí văn phòng TNN SI qua mạng LAN nội bộ. Không cần cài đặt ứng dụng — chỉ cần trình duyệt web (Chrome, Firefox, Safari, Edge).</p>
-
-<h3>Truy cập hệ thống</h3>
-<p>Mở trình duyệt, nhập địa chỉ:</p>
-<p style="text-align:center; font-size:16pt; font-weight:bold; color:#1a3a6b;">http://192.168.1.180</p>
-
-<div class="note">
-  <b>Lưu ý:</b> Máy tính hoặc điện thoại phải kết nối cùng mạng LAN văn phòng (WiFi nội bộ hoặc dây mạng). Không truy cập được từ internet bên ngoài.
-</div>
-
-<h3>Sơ đồ thiết bị</h3>
+<h2>1. Giới thiệu hệ thống</h2>
+<p>TNN Smart Control là hệ thống điều khiển đèn và điều hòa không khí văn phòng TNN SI qua mạng LAN nội bộ. Người dùng truy cập giao diện web bằng trình duyệt trên PC, điện thoại hoặc kiosk — không cần cài phần mềm.</p>
 <table>
-  <tr><th>Thiết bị</th><th>Địa chỉ IP</th><th>Vai trò</th></tr>
-  <tr><td>ESP32 (Web Server)</td><td>192.168.1.180</td><td>Máy chủ web, giao diện điều khiển chính</td></tr>
-  <tr><td>MEGA2560</td><td>192.168.1.178</td><td>Điều khiển 16 relay đèn qua RS485</td></tr>
-  <tr><td>Siemens LOGO! 8</td><td>192.168.1.6</td><td>Điều khiển 4 máy điều hòa</td></tr>
-  <tr><td>AMX CE-IO4</td><td>192.168.1.7</td><td>Nhận tín hiệu 4 công tắc tường</td></tr>
-  <tr><td>AMX CE-REL8</td><td>192.168.1.204</td><td>Điều khiển 4 relay đèn khu AMX</td></tr>
+  <tr><th>Chức năng</th><th>Thiết bị</th><th>Số kênh</th></tr>
+  <tr><td>Điều khiển đèn văn phòng</td><td>Arduino MEGA2560 + board relay RS485</td><td>16 kênh</td></tr>
+  <tr><td>Điều khiển điều hòa</td><td>Siemens LOGO! 8</td><td>4 máy</td></tr>
+  <tr><td>Điều khiển đèn AMX</td><td>AMX CE-REL8</td><td>4 kênh</td></tr>
+  <tr><td>Công tắc tường AMX</td><td>AMX CE-IO4</td><td>4 công tắc</td></tr>
+</table>
+<div class="note">Hệ thống hoạt động hoàn toàn trên mạng LAN nội bộ — không cần kết nối Internet.</div>
+
+<h2>2. Truy cập giao diện</h2>
+<p>Mở trình duyệt web và nhập địa chỉ:</p>
+<p style="font-size:14pt; font-weight:bold; color:#1a3a5c;">http://192.168.1.180</p>
+<div class="tip">Thiết bị phải kết nối vào cùng mạng LAN nội bộ (WiFi hoặc dây LAN).</div>
+<p>Giao diện gồm 4 tab ở đầu trang. Nhấn tab để chuyển — không cần tải lại trang:</p>
+<table>
+  <tr><th>Tab</th><th>Chức năng</th></tr>
+  <tr><td>Đèn</td><td>Bật/tắt 16 đèn văn phòng</td></tr>
+  <tr><td>Điều hòa</td><td>Bật/tắt 4 máy điều hòa</td></tr>
+  <tr><td>AMX</td><td>4 đèn AMX + trạng thái 4 công tắc tường</td></tr>
+  <tr><td>KIOS</td><td>Trình duyệt nhúng (KC-Brain, SL-240C, URL tùy chọn)</td></tr>
 </table>
 
-<h2>2. Menu chính</h2>
+<h2>3. Điều khiển đèn (tab Đèn)</h2>
+<p>Nhấn nút để bật/tắt từng đèn. Nút xanh lá = BẬT, nút xám = TẮT. Giao diện tự cập nhật mỗi 2 giây. Nhấn TẮT TẤT CẢ để tắt đồng loạt 16 kênh.</p>
+<p>Công tắc vật lý gắn tường cũng điều khiển được đèn — trạng thái đồng bộ lên web sau tối đa 2 giây.</p>
 
-<p>Trang chủ (<code>http://192.168.1.180</code>) hiển thị 4 nút điều hướng:</p>
-
+<h2>4. Điều khiển điều hòa (tab Điều hòa)</h2>
+<p>Nhấn nút để bật/tắt từng máy. Nút xanh lá = BẬT, xanh dương = TẮT.</p>
 <table>
-  <tr><th>Nút</th><th>Trang</th><th>Chức năng</th></tr>
-  <tr><td>🏠 Điều khiển đèn MEGA</td><td>/mega</td><td>Bật/tắt 16 relay đèn, tắt tất cả</td></tr>
-  <tr><td>❄️ Điều khiển điều hòa</td><td>/modbus</td><td>Bật/tắt 4 máy điều hòa</td></tr>
-  <tr><td>🧩 AMX Control</td><td>/amx</td><td>Điều khiển đèn AMX + xem trạng thái công tắc tường</td></tr>
-  <tr><td>🖥️ KIOS</td><td>/kios</td><td>Nhúng giao diện KC-Brain, SL-240C hoặc trang web tùy chọn</td></tr>
+  <tr><th>Nút</th><th>Máy điều hòa</th></tr>
+  <tr><td>ĐH1</td><td>Kế Toán</td></tr>
+  <tr><td>ĐH2</td><td>P. Nguyên</td></tr>
+  <tr><td>ĐH3</td><td>P. Họp</td></tr>
+  <tr><td>ĐH4</td><td>P. Tuấn</td></tr>
+</table>
+<div class="warn">Mỗi lần nhấn nút là 1 xung toggle. Không nhấn liên tục nhiều lần trong vòng 1 giây.</div>
+<p>Giao diện gốc LOGO!: <code>http://192.168.1.6/webroot/main.htm</code> — User: <code>Web User</code> — Pass: <code>123456</code></p>
+
+<h2>5. Điều khiển AMX (tab AMX)</h2>
+<p>Phần trên: 4 nút relay đèn (P.Họp / P.Tuấn / K.Doanh / H.Lang) — nhấn để bật/tắt.</p>
+<p>Phần dưới: 4 chỉ thị tròn IO1-IO4 hiển thị trạng thái công tắc tường. Xanh = đóng, xám = mở.</p>
+<p>Khi bấm công tắc tường, hệ thống toggle relay tương ứng (không phụ thuộc chiều đóng/mở của công tắc).</p>
+
+<h2>6. Màn hình KIOS (tab KIOS)</h2>
+<p>Tab KIOS cung cấp trình duyệt nhúng để điều khiển thiết bị khác trong hệ thống:</p>
+<ul>
+  <li>Nhấn nút KC-Brain hoặc SL-240C để mở giao diện thiết bị tương ứng.</li>
+  <li>Nhập URL tùy chọn vào ô địa chỉ rồi nhấn Enter.</li>
+  <li>Nút Tải lại (↺): tải lại iframe hiện tại.</li>
+  <li>Nút Mở tab mới (↗): mở giao diện thiết bị trong tab trình duyệt riêng.</li>
+</ul>
+<div class="tip">Nếu giao diện thiết bị trong iframe hiển thị trống, nhấn "Mở tab mới".</div>
+
+<h2>7. Xử lý sự cố thường gặp</h2>
+<table>
+  <tr><th>Triệu chứng</th><th>Cách xử lý</th></tr>
+  <tr><td>Không truy cập được http://192.168.1.180</td><td>Kiểm tra thiết bị cùng mạng LAN, ESP32 đã cắm nguồn và dây LAN.</td></tr>
+  <tr><td>Trạng thái không cập nhật</td><td>Kiểm tra nguồn và dây LAN của MEGA/LOGO!. ESP32 tự reconnect sau 3-5 giây.</td></tr>
+  <tr><td>Điều hòa không phản hồi</td><td>Kiểm tra nguồn LOGO! và dây LAN. Xác nhận Modbus Server đã bật trong Logo! Soft Comfort.</td></tr>
+  <tr><td>Chỉ thị IO không đổi màu</td><td>Truy cập http://192.168.1.7, đặt Mode=INPUT và inputMode=DIGITAL cho 4 IO.</td></tr>
+  <tr><td>Relay AMX không phản hồi</td><td>Kiểm tra CE-REL8 tại http://192.168.1.204 và dây LAN.</td></tr>
+  <tr><td>KIOS iframe trống</td><td>Nhấn "Mở tab mới" để mở giao diện thiết bị trực tiếp.</td></tr>
 </table>
 
-<h2 class="pagebreak">3. Trang điều khiển đèn MEGA (/mega)</h2>
+<h2>8. Thông tin kỹ thuật (dành cho kỹ thuật viên)</h2>
 
-<h3>Chức năng</h3>
-<ul>
-  <li>Hiển thị 16 nút relay — tên khu vực được gán cho từng relay.</li>
-  <li>Bấm nút để <b>bật/tắt</b> đèn tương ứng. Nút xanh = đang bật, nút tối = tắt.</li>
-  <li>Nút <b>"TẮT TẤT CẢ"</b> tắt đồng thời toàn bộ 16 relay.</li>
-  <li>Trạng thái tự động cập nhật mỗi 3 giây.</li>
-</ul>
-
-<h3>Công tắc vật lý trên tường</h3>
-<p>Các công tắc tường được nối trực tiếp vào MEGA2560. Bật/tắt công tắc vật lý sẽ toggle relay tương ứng. Giao diện web sẽ cập nhật trạng thái tự động sau vài giây.</p>
-
-<h3>Nút Scene (nút cứng trên tủ điện — pin 30)</h3>
-<ul>
-  <li>Bấm 1 lần: <b>nếu có đèn nào đang bật</b> → tắt tất cả.</li>
-  <li>Bấm 1 lần: <b>nếu tất cả đang tắt</b> → bật lại đèn mặc định (khu Kế Toán).</li>
-</ul>
-
-<div class="tip">
-  <b>Mẹo:</b> Có thể bấm dồn dập nhiều lần liên tiếp — hệ thống xử lý từng lệnh không bị trùng lặp.
-</div>
-
-<h2>4. Trang điều khiển điều hòa (/modbus)</h2>
-
-<h3>Chức năng</h3>
-<ul>
-  <li>Hiển thị 4 nút điều hòa: ĐH1 Kế Toán, ĐH2 P.Nguyên, ĐH3 P.Họp, ĐH4 P.Tuấn.</li>
-  <li>Bấm nút để <b>toggle</b> (bật nếu đang tắt, tắt nếu đang bật).</li>
-  <li>Màu xanh = điều hòa đang chạy (có điện), màu tối = tắt.</li>
-  <li>Trạng thái phản hồi từ cảm biến thật của LOGO! 8 (không phải ước tính).</li>
-</ul>
-
-<h3>Lưu ý vận hành điều hòa</h3>
-<div class="warn">
-  <b>Quan trọng:</b> Mỗi lần bấm nút, hệ thống gửi 1 xung điện mô phỏng nhấn nút vật lý trên điều hòa (ON→chờ 500ms→OFF). Không bấm liên tục trong vòng 3 giây — hệ thống có khóa chống bấm dồn để bảo vệ relay.
-</div>
-<ul>
-  <li>Nếu điều hòa đang ở chế độ ngủ (không phản hồi lệnh điều khiển từ xa), hãy thao tác thủ công trên máy trước.</li>
-  <li>Trạng thái "bật" trên giao diện phản ánh relay của LOGO! — không phải trạng thái làm lạnh của máy.</li>
-</ul>
-
-<h2 class="pagebreak">5. Trang AMX Control (/amx)</h2>
-
-<h3>5.1 Khu vực điều khiển relay đèn (CE-REL8)</h3>
-<ul>
-  <li>4 nút relay — bấm để bật/tắt đèn khu AMX.</li>
-  <li>Hoạt động độc lập với hệ thống MEGA và Kramer Control.</li>
-  <li>Trạng thái cập nhật mỗi 2 giây.</li>
-</ul>
-
-<h3>5.2 Khu vực công tắc tường (CE-IO4)</h3>
-<ul>
-  <li>4 chấm tròn hiển thị trạng thái 4 công tắc tường: <b>xanh = đang bật</b>, xám = tắt.</li>
-  <li>Trạng thái cập nhật mỗi 800ms (tối đa chậm 800ms so với thực tế).</li>
-</ul>
-
-<h3>5.3 Logic công tắc tường điều khiển relay</h3>
-<p>Mỗi công tắc tường được liên kết với 1 relay đèn theo nguyên tắc <b>toggle</b>:</p>
-<ul>
-  <li>Công tắc thay đổi trạng thái (bật→tắt <i>hoặc</i> tắt→bật) → relay tương ứng toggle.</li>
-  <li>Không phụ thuộc vào chiều của công tắc — chỉ quan tâm đến <i>sự thay đổi</i>.</li>
-</ul>
-
-<div class="note">
-  <b>Lưu ý:</b> Hệ thống hoạt động song song với Kramer Control. Khi công tắc tường bấm, Kramer phản hồi trước (trong 500ms). Nếu Kramer đã toggle rồi, ESP32 sẽ bỏ qua — tránh toggle 2 lần. Nếu Kramer chưa xử lý, ESP32 sẽ tự toggle.
-</div>
-
-<h3>5.4 Nút "ℹ️ Thông tin"</h3>
-<p>Bấm để xem thông tin kỹ thuật: địa chỉ IP thiết bị, tần số poll, delay timeout. Dành cho kỹ thuật viên kiểm tra cấu hình.</p>
-
-<h2>6. Trang KIOS (/kios)</h2>
-
-<h3>Chức năng</h3>
-<p>Trang nhúng giao diện web của các thiết bị khác trong hệ thống:</p>
-<table>
-  <tr><th>Nút</th><th>Địa chỉ</th><th>Mô tả</th></tr>
-  <tr><td>KC-Brain</td><td>(cấu hình sẵn)</td><td>Giao diện Kramer Control Brain</td></tr>
-  <tr><td>SL-240C</td><td>(cấu hình sẵn)</td><td>Giao diện thiết bị SL-240C</td></tr>
-  <tr><td>Nhập trang mới</td><td>Tùy chọn</td><td>Nhập URL bất kỳ để nhúng vào khung</td></tr>
-</table>
-
-<div class="note">
-  <b>Lưu ý:</b> Một số trang web không cho phép nhúng trong iframe (do chính sách bảo mật của trang đó). Nếu khung hiển thị trắng, hãy truy cập trực tiếp bằng cách mở URL trong tab mới.
-</div>
-
-<h2 class="pagebreak">7. Xử lý sự cố thường gặp</h2>
-
-<table>
-  <tr><th>Hiện tượng</th><th>Nguyên nhân có thể</th><th>Cách xử lý</th></tr>
-  <tr>
-    <td>Không mở được trang web</td>
-    <td>Máy không cùng mạng LAN, hoặc ESP32 bị reset</td>
-    <td>Kiểm tra kết nối mạng. Thử lại sau 30 giây (ESP32 khởi động lại tự kết nối).</td>
-  </tr>
-  <tr>
-    <td>Nút bấm không phản hồi</td>
-    <td>ESP32 đang bận xử lý lệnh khác, hoặc MEGA/LOGO! không kết nối</td>
-    <td>Chờ 2-3 giây rồi thử lại. Kiểm tra đèn trạng thái trên tủ điện.</td>
-  </tr>
-  <tr>
-    <td>Trạng thái đèn không khớp thực tế</td>
-    <td>Có người thao tác trực tiếp trên công tắc vật lý</td>
-    <td>Chờ tối đa 3 giây để hệ thống tự đồng bộ. Hoặc bấm F5 để tải lại trang.</td>
-  </tr>
-  <tr>
-    <td>Chấm tròn IO không đổi màu khi bấm công tắc tường</td>
-    <td>CE-IO4 chưa cấu hình INPUT mode, hoặc mất kết nối mạng đến 192.168.1.7</td>
-    <td>Kiểm tra đèn mạng trên CE-IO4. Ping thử 192.168.1.7 từ máy tính. Nếu cần, liên hệ kỹ thuật để cấu hình lại inputMode.</td>
-  </tr>
-  <tr>
-    <td>Relay AMX không toggle khi bấm công tắc</td>
-    <td>Trễ 500ms + 800ms polling = tối đa 1.3 giây mới phản hồi</td>
-    <td>Bình thường — chờ khoảng 1-2 giây sau khi bấm công tắc.</td>
-  </tr>
-  <tr>
-    <td>Điều hòa không phản hồi lệnh bật/tắt</td>
-    <td>LOGO! 8 mất kết nối, hoặc máy điều hòa ở chế độ đặc biệt</td>
-    <td>Kiểm tra đèn LOGO! 8 (192.168.1.6). Thử điều khiển thủ công bằng remote trước.</td>
-  </tr>
-  <tr>
-    <td>Trang KIOS hiển thị trắng</td>
-    <td>Trang đích không cho phép nhúng iframe</td>
-    <td>Mở URL trực tiếp trong tab mới của trình duyệt.</td>
-  </tr>
-</table>
-
-<h2>8. Thông tin kỹ thuật dành cho kỹ thuật viên</h2>
-
-<h3>Địa chỉ IP toàn bộ hệ thống</h3>
+<h3>8.1 Địa chỉ IP toàn hệ thống</h3>
 <table>
   <tr><th>Thiết bị</th><th>IP</th><th>Port</th><th>Giao thức</th></tr>
-  <tr><td>ESP32 Web Server</td><td>192.168.1.180</td><td>80</td><td>HTTP</td></tr>
-  <tr><td>MEGA2560</td><td>192.168.1.178</td><td>9000</td><td>TCP text</td></tr>
-  <tr><td>Siemens LOGO! 8</td><td>192.168.1.6</td><td>504</td><td>Modbus TCP</td></tr>
-  <tr><td>LOGO! Web Editor</td><td>192.168.1.6</td><td>80</td><td>HTTP (User: Web User / Pass: 123456)</td></tr>
-  <tr><td>AMX CE-IO4</td><td>192.168.1.7</td><td>44197</td><td>TCP text AMX</td></tr>
-  <tr><td>AMX CE-REL8</td><td>192.168.1.204</td><td>44197</td><td>TCP text AMX</td></tr>
-  <tr><td>AMX CE-IRS4</td><td>192.168.1.203</td><td>44197</td><td>TCP text AMX</td></tr>
+  <tr><td>ESP32 (Web server)</td><td>192.168.1.180</td><td>80</td><td>HTTP</td></tr>
+  <tr><td>MEGA2560 (RS485)</td><td>192.168.1.178</td><td>9000</td><td>TCP text</td></tr>
+  <tr><td>LOGO! 8 (Điều hòa)</td><td>192.168.1.6</td><td>504</td><td>Modbus TCP</td></tr>
+  <tr><td>AMX CE-IO4 (Công tắc tường)</td><td>192.168.1.7</td><td>44197</td><td>TCP AMX text</td></tr>
+  <tr><td>AMX CE-REL8 (Relay)</td><td>192.168.1.204</td><td>44197</td><td>TCP AMX text</td></tr>
+  <tr><td>AMX CE-IRS4 (IR, dự phòng)</td><td>192.168.1.203</td><td>44197</td><td>TCP AMX text</td></tr>
 </table>
 
-<h3>Lệnh kiểm tra nhanh qua Telnet/PuTTY</h3>
-<p><b>MEGA2560</b> (192.168.1.178:9000):</p>
-<ul>
-  <li><code>get /relay/all</code> — đọc trạng thái 16 relay</li>
-  <li><code>set /relay/1/state true</code> — bật relay 1</li>
-  <li><code>set /system/all off</code> — tắt tất cả</li>
-</ul>
-<p><b>AMX CE-IO4</b> (192.168.1.7:44197):</p>
-<ul>
-  <li><code>get /io/1/digitalInput</code> — đọc trạng thái công tắc 1</li>
-</ul>
-<p><b>AMX CE-REL8</b> (192.168.1.204:44197):</p>
-<ul>
-  <li><code>get /relay/1/state</code> — đọc trạng thái relay 1</li>
-  <li><code>set /relay/1/state true</code> — bật relay 1</li>
-</ul>
+<h3>8.2 Version firmware</h3>
+<table>
+  <tr><th>Firmware</th><th>Version</th></tr>
+  <tr><td>Code_ESP32_Web_UI_TCP_client_.ino</td><td>v2.6.0</td></tr>
+  <tr><td>Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino</td><td>v1.5.0</td></tr>
+</table>
 
-<h3>Cài đặt firmware (Arduino IDE)</h3>
-<ul>
-  <li>Board ESP32: chọn <b>"ESP32 Dev Module"</b></li>
-  <li>Board MEGA: chọn <b>"Arduino Mega 2560"</b></li>
-  <li>Thư viện ESP32: <code>Ethernet</code> (chuẩn)</li>
-  <li>Thư viện MEGA: <code>Ethernet2</code> (cho W5500)</li>
-  <li>Source code: branch <code>claude/gifted-darwin-emresu</code> trên GitHub</li>
-</ul>
+<h3>8.3 Kiểm tra nhanh từ trình duyệt</h3>
+<table>
+  <tr><th>URL kiểm tra</th><th>Kết quả mong đợi</th></tr>
+  <tr><td>http://192.168.1.180/status</td><td>L1=0,L2=0,...,L16=0</td></tr>
+  <tr><td>http://192.168.1.180/ac/status</td><td>JSON trạng thái 4 điều hòa</td></tr>
+  <tr><td>http://192.168.1.180/amx/status</td><td>JSON relay + IO AMX</td></tr>
+  <tr><td>http://192.168.1.180/cmd?c=set%20/relay/1/state%20true</td><td>OK (bật đèn 1)</td></tr>
+  <tr><td>http://192.168.1.180/amx/relay?ch=1&amp;value=true</td><td>OK (bật relay AMX 1)</td></tr>
+</table>
 
-<div class="warn">
-  <b>Cảnh báo khi flash firmware:</b> Sau khi flash ESP32, hệ thống cần khoảng 5 giây để khởi động và kết nối mạng. Không thao tác ngay sau khi flash — chờ thấy đèn mạng W5500 sáng ổn định.
-</div>
+<h3>8.4 Giao thức lệnh AMX</h3>
+<p>Tất cả lệnh kết thúc bằng \n (0x0A):</p>
+<table>
+  <tr><th>Lệnh</th><th>Mô tả</th></tr>
+  <tr><td><code>get /io/N/digitalInput</code></td><td>Đọc công tắc N (CE-IO4)</td></tr>
+  <tr><td><code>set /relay/N/state true|false</code></td><td>Đặt relay N (CE-REL8)</td></tr>
+  <tr><td><code>get /relay/N/state</code></td><td>Đọc relay N (CE-REL8)</td></tr>
+</table>
+
+<h3>8.5 Cấu hình CE-IO4 thủ công</h3>
+<p>Truy cập <code>http://192.168.1.7</code>, đặt Mode = INPUT và Input Mode = DIGITAL cho 4 IO.</p>
+<div class="note">Subscribe không hoạt động trên firmware CE-IO4 — ESP32 dùng polling get mỗi 600ms. Độ trễ tối đa 600ms.</div>
 
 <hr>
-<p class="center sub">TNN Smart Control — Tài liệu nội bộ TNN SI &nbsp;|&nbsp; www.tnnsi.vn &nbsp;|&nbsp; Cập nhật: Tháng 6/2026</p>
+<p style="text-align:center; color:#666; font-size:10pt;">TNN Smart Control | TNN SI | www.tnnsi.vn | Tài liệu nội bộ</p>
 
 </body>
 </html>
