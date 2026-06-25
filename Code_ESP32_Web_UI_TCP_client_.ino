@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.2"
+#define FW_VERSION "3.0.3"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -772,6 +772,8 @@ void handleWebRequest(EthernetClient client) {
                    "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<div class='setting-row'><label>Mật khẩu mới</label>"
                    "<input type='password' id='new-p' placeholder='4–32 ký tự' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
+    client.println("<div class='setting-row'><label>Nhập lại mật khẩu mới</label>"
+                   "<input type='password' id='new-p2' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
     client.println("<div class='sched-status' id='pass-status'></div>");
     client.println("</div>");  // password card
@@ -859,13 +861,15 @@ void handleWebRequest(EthernetClient client) {
     client.println("function changePass(){");
     client.println("  var o=document.getElementById('old-p').value;");
     client.println("  var n=document.getElementById('new-p').value;");
+    client.println("  var n2=document.getElementById('new-p2').value;");
     client.println("  var s=document.getElementById('pass-status');");
-    client.println("  if(!o||!n){s.innerText='⚠️ Nhập đủ mật khẩu cũ và mới';return;}");
+    client.println("  if(!o||!n||!n2){s.innerText='⚠️ Nhập đủ 3 ô mật khẩu';return;}");
+    client.println("  if(n!==n2){s.innerText='⚠️ Mật khẩu mới không khớp';return;}");
     client.println("  if(n.length<4||n.length>32){s.innerText='⚠️ Mật khẩu mới 4–32 ký tự';return;}");
     client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},");
     client.println("    body:'old_p='+encodeURIComponent(o)+'&new_p='+encodeURIComponent(n)})");
     client.println("  .then(function(r){return r.json();}).then(function(d){");
-    client.println("    if(d.ok){s.innerText='✅ Đổi mật khẩu thành công!';document.getElementById('old-p').value='';document.getElementById('new-p').value='';}");
+    client.println("    if(d.ok){s.innerText='✅ Đổi mật khẩu thành công!';document.getElementById('old-p').value='';document.getElementById('new-p').value='';document.getElementById('new-p2').value='';}");
     client.println("    else if(d.err==='wrong_pass')s.innerText='❌ Mật khẩu hiện tại không đúng';");
     client.println("    else s.innerText='❌ Lỗi: '+d.err;");
     client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
