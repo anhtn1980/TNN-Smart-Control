@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.3"
+#define FW_VERSION "3.0.4"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -765,9 +765,12 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='save-btn' onclick='saveSched()'>💾 Lưu cài đặt</button>");
     client.println("<div class='sched-status' id='sched-status'></div>");
     client.println("</div>");  // setting-card
-    // Password card
+    // Password card — collapsed by default
     client.println("<div class='setting-card'>");
-    client.println("<h3>🔑 Đổi mật khẩu</h3>");
+    client.println("<div style='display:flex;align-items:center;justify-content:space-between;cursor:pointer' onclick='togglePass()'>"
+                   "<h3 style='margin:0'>🔑 Đổi mật khẩu</h3>"
+                   "<span id='pass-toggle' style='color:#64748b;font-size:12px'>▼ Mở</span></div>");
+    client.println("<div id='pass-body' style='display:none;margin-top:12px'>");
     client.println("<div class='setting-row'><label>Mật khẩu hiện tại</label>"
                    "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<div class='setting-row'><label>Mật khẩu mới</label>"
@@ -776,7 +779,7 @@ void handleWebRequest(EthernetClient client) {
                    "<input type='password' id='new-p2' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
     client.println("<div class='sched-status' id='pass-status'></div>");
-    client.println("</div>");  // password card
+    client.println("</div></div>");  // pass-body + password card
     // Info card
     client.println("<div class='setting-card'>");
     client.println("<h3>ℹ️ Thông tin hệ thống</h3>");
@@ -873,6 +876,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("    else if(d.err==='wrong_pass')s.innerText='❌ Mật khẩu hiện tại không đúng';");
     client.println("    else s.innerText='❌ Lỗi: '+d.err;");
     client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
+    client.println("function togglePass(){var b=document.getElementById('pass-body'),t=document.getElementById('pass-toggle');var open=b.style.display==='block';b.style.display=open?'none':'block';t.innerText=open?'▼ Mở':'▲ Đóng';}");
 
     // ── polling master ──
     client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
