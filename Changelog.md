@@ -41,6 +41,16 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [2.7.0] - 2026-06-25
+Thêm HTTP Basic Authentication để bảo vệ giao diện khi mở cổng NAT ra ngoài Internet.
+
+- Định nghĩa `AUTH_USER`, `AUTH_PASS`, `AUTH_B64` (Base64 của `user:pass`) trong config section đầu file — đổi tại đây trước khi nạp firmware.
+- `checkAuth(request)`: đọc header `Authorization: Basic <token>`, so sánh với `AUTH_B64`.
+- `send401(client)`: trả `401 Unauthorized` + header `WWW-Authenticate: Basic realm="TNN Smart Control"` để trình duyệt hiện hộp thoại đăng nhập.
+- Kiểm tra ngay sau khi đọc xong HTTP header, trước khi xử lý bất kỳ route nào.
+- Toàn bộ endpoint đều được bảo vệ: trang web, API relay, AC, AMX.
+- Mặc định: user `tnn` / pass `tnn@2026` — **thay trước khi deploy ra Internet**.
+
 ### [2.6.0] - 2026-06-25
 Refactor giao diện sang SPA (Single Page Application) — không load lại trang khi chuyển màn hình.
 

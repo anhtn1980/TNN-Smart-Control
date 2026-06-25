@@ -2,7 +2,7 @@
 #include <Ethernet.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.6.0"
+#define FW_VERSION "2.7.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -39,6 +39,14 @@ const int   logoPort = 504;
 #define LOGO_PULSE_MS       500
 #define LOGO_COOLDOWN_MS    1500
 #define LOGO_MODBUS_TIMEOUT_MS 200
+
+/* ===== BASIC AUTH ===== */
+// Đổi username/password tại đây trước khi nạp firmware
+#define AUTH_USER "tnn"
+#define AUTH_PASS "tnn@2026"
+// Credential dạng Base64("tnn:tnn@2026") — tính lại nếu đổi user/pass
+// Dùng: https://www.base64encode.org/ hoặc echo -n "user:pass" | base64
+static const char AUTH_B64[] = "dG5uOnRubkAyMDI2";
 
 /* ===== SERVER ===== */
 EthernetServer server(80);
@@ -323,6 +331,26 @@ void amxReconcile() {
   }
 }
 
+/* ===== BASIC AUTH HELPER ===== */
+// Trả true nếu request chứa đúng Authorization header
+bool checkAuth(const String& req) {
+  int idx = req.indexOf("Authorization: Basic ");
+  if (idx < 0) return false;
+  int end = req.indexOf("\r\n", idx + 21);
+  String token = (end > 0) ? req.substring(idx + 21, end) : req.substring(idx + 21);
+  token.trim();
+  return token == AUTH_B64;
+}
+
+void send401(EthernetClient& client) {
+  client.println("HTTP/1.1 401 Unauthorized\r\n"
+                 "WWW-Authenticate: Basic realm=\"TNN Smart Control\"\r\n"
+                 "Content-Type: text/plain\r\n"
+                 "Connection: close\r\n");
+  client.println("401 Unauthorized");
+  client.stop();
+}
+
 /* ===== HTTP HANDLER ===== */
 void handleWebRequest(EthernetClient client) {
   String request = "";
@@ -338,6 +366,9 @@ void handleWebRequest(EthernetClient client) {
     yield();
   }
   if (!headerComplete) { client.stop(); return; }
+
+  // ===== BASIC AUTH CHECK =====
+  if (!checkAuth(request)) { send401(client); return; }
 
   // ===== AC TOGGLE =====
   if (request.indexOf("GET /ac/toggle?") >= 0) {
