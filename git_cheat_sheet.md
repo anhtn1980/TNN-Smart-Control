@@ -33,14 +33,18 @@ git push --force                      # nếu chắc chắn muốn xóa các fil
 ```
 
 ## 5. Hướng dẫn tải dự án từ GitHub về máy tính mới (Ổ C)
-* **Cách 1: Sử dụng Git để Clone (Khuyên dùng)**
-  Mở Terminal tại thư mục muốn lưu ở ổ C (ví dụ: `C:\`) rồi chạy lệnh:
-  ```bash
-  git clone https://github.com
-  ```
+Mở Terminal tại thư mục muốn lưu ở ổ C (ví dụ: `C:\`) rồi chạy lệnh:
+```bash
+git clone https://github.com/anhtn1980/tnn-smart-control.git
+```
 
-* **Cách 2: Tải file nén ZIP không cần Git**
-  Truy cập link GitHub -> Chọn nút **Code** xanh lá -> **Download ZIP** -> Giải nén vào ổ C.
+## 5.1 Lệnh reset --hard xóa mọi thay đổi cục bộ, ép toàn bộ về đúng bản trên Git
+```bash
+git fetch origin
+git reset --hard origin/claude/gifted-darwin-emresu
+```
+
+
 
 ## 6. Các lệnh kiểm tra thông dụng khác
 ```bash
