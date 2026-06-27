@@ -7,7 +7,7 @@ Hướng dẫn làm việc cho Claude Code trong project này.
 ## Tổng quan nhanh
 
 Hệ thống điều khiển đèn + điều hòa văn phòng qua LAN nội bộ.
-- **ESP32 + W5500** (`192.168.1.180`): Web server port 80, SPA UI, HTTP API gateway — firmware `Code_ESP32_Web_UI_TCP_client_.ino` v3.0.8
+- **ESP32 + W5500** (`192.168.1.180`): Web server port 80, SPA UI, HTTP API gateway — firmware `Code_ESP32_Web_UI_TCP_client_.ino` v3.0.9
 - **MEGA2560 + W5500** (`192.168.1.178`): TCP server port 9000, 16 relay RS485 — firmware `Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino` v1.5.0
 - **LOGO! 8** (`192.168.1.6:504`): Modbus TCP, 4 điều hòa
 - **AMX CE-IO4** (`192.168.1.7:44197`): 4 công tắc tường (input)
@@ -66,7 +66,7 @@ Không có unit test. Test thực tế:
 - Cookie-based session, password only (không có username).
 - Biến `authPass` đọc từ NVS khi boot (namespace `"tnn"`, key `auth_p"`, default `"123456"`).
 - Token `authToken` tạo mới mỗi lần reboot — mọi session cũ tự hết hạn sau reboot.
-- Khối cài đặt ẩn (`secret-body`: Hẹn giờ tắt thiết bị + Hiển thị tab + Đổi mật khẩu) trong tab Cài đặt — hiện khi nhấn tiêu đề "Thông tin hệ thống" 5 lần liên tiếp (trong 1.5s).
+- Khối cài đặt (`secret-body`: Hẹn giờ tắt thiết bị + Hiển thị tab + Đổi mật khẩu) trong tab Cài đặt — tiêu đề 3 mục luôn hiện, phần chi tiết (`.sdet`) ẩn; nhấn tiêu đề "Thông tin hệ thống" 3 lần liên tiếp (trong 1.5s) để hiện/ẩn chi tiết.
 
 ---
 

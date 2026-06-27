@@ -41,6 +41,12 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.0.9] - 2026-06-27
+Tinh chỉnh easter egg: ấn 3 lần (thay vì 5), giữ tiêu đề mục khi ẩn.
+
+- Giảm số lần nhấn "Thông tin hệ thống" để mở khối cài đặt: **5 → 3 lần**.
+- Khi ẩn: chỉ ẩn phần **chi tiết** (`.sdet`: các dòng nhập + nút lưu), **giữ lại tiêu đề** 3 mục (Hẹn giờ tắt thiết bị / Hiển thị tab / Đổi mật khẩu) để biết có những mục gì. Nhấn 3 lần để hiện/ẩn chi tiết.
+
 ### [3.0.8] - 2026-06-27
 Đổi tên + ẩn cài đặt lịch, thêm tùy chọn ẩn/hiện tab.
 

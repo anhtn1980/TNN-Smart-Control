@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.8"
+#define FW_VERSION "3.0.9"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -790,12 +790,14 @@ void handleWebRequest(EthernetClient client) {
     client.println("<div>Uptime: <span id='uptime'>...</span></div>");
     client.println("</div></div>");  // info card
 
-    // ── KHỐI CÀI ĐẶT ẨN (easter egg: nhấn "Thông tin hệ thống" 5 lần) ──
-    client.println("<div id='secret-body' style='display:none'>");
+    // ── KHỐI CÀI ĐẶT (tiêu đề luôn hiện; chi tiết .sdet ẩn — mở bằng easter egg:
+    //    nhấn "Thông tin hệ thống" 3 lần liên tiếp) ──
+    client.println("<div id='secret-body'>");
 
     // Card: Hẹn giờ tắt thiết bị
     client.println("<div class='setting-card'>");
     client.println("<h3>⏰ Hẹn giờ tắt thiết bị</h3>");
+    client.println("<div class='sdet' style='display:none'>");
     client.println("<div class='setting-row'><label>Bật lịch tắt tự động</label>"
                    "<label class='toggle'><input type='checkbox' id='sched-en'>"
                    "<span class='slider'></span></label></div>");
@@ -807,11 +809,12 @@ void handleWebRequest(EthernetClient client) {
                    "</div></div>");
     client.println("<button class='save-btn' onclick='saveSched()'>💾 Lưu cài đặt</button>");
     client.println("<div class='sched-status' id='sched-status'></div>");
-    client.println("</div>");  // setting-card
+    client.println("</div></div>");  // sdet + setting-card
 
     // Card: Hiển thị tab
     client.println("<div class='setting-card'>");
     client.println("<h3>👁️ Hiển thị tab</h3>");
+    client.println("<div class='sdet' style='display:none'>");
     const char* tvNames[4] = {"🔌 Đèn","❄️ Điều hòa","🧩 AMX","🖥️ KIOS"};
     for (int i = 0; i < 4; i++) {
       client.print("<div class='setting-row'><label>"); client.print(tvNames[i]);
@@ -820,11 +823,12 @@ void handleWebRequest(EthernetClient client) {
     }
     client.println("<button class='save-btn' onclick='saveTabs()'>💾 Lưu hiển thị</button>");
     client.println("<div class='sched-status' id='tabs-status'></div>");
-    client.println("</div>");  // setting-card
+    client.println("</div></div>");  // sdet + setting-card
 
     // Card: Đổi mật khẩu
     client.println("<div class='setting-card'>");
     client.println("<h3>🔑 Đổi mật khẩu</h3>");
+    client.println("<div class='sdet' style='display:none'>");
     client.println("<div class='setting-row'><label>Mật khẩu hiện tại</label>"
                    "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<div class='setting-row'><label>Mật khẩu mới</label>"
@@ -833,7 +837,7 @@ void handleWebRequest(EthernetClient client) {
                    "<input type='password' id='new-p2' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
     client.println("<div class='sched-status' id='pass-status'></div>");
-    client.println("</div>");  // setting-card
+    client.println("</div></div>");  // sdet + setting-card
 
     client.println("</div>");  // secret-body
     client.println("</div></div>");  // settings-wrap + page
@@ -931,8 +935,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("    else if(d.err==='wrong_pass')s.innerText='❌ Mật khẩu hiện tại không đúng';");
     client.println("    else s.innerText='❌ Lỗi: '+d.err;");
     client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
-    client.println("var _itap=0,_itimer=0;");
-    client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=5){_itap=0;var b=document.getElementById('secret-body');b.style.display=b.style.display==='block'?'none':'block';}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
+    client.println("var _itap=0,_itimer=0,_secretOn=false;");
+    client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=3){_itap=0;_secretOn=!_secretOn;document.querySelectorAll('.sdet').forEach(function(e){e.style.display=_secretOn?'block':'none';});}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
 
     // ── polling master ──
     client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
