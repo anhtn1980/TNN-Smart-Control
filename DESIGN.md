@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v3.0.5 — 2026-06-25
+> Lần cập nhật gần nhất: v3.0.7 — 2026-06-27
 
 ---
 
@@ -43,7 +43,7 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 | Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.0.5 / 192.168.1.180 |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.0.7 / 192.168.1.180 |
 | MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
 | LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
 | AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |
@@ -332,6 +332,7 @@ CE-IO4 thay đổi trạng thái (bất kể bật→tắt hay tắt→bật)
 | LOGO! liên tục reconnect/disconnect | LOGO! không giữ idle TCP connection — đóng ngay sau khi không có traffic | Connect-per-transaction thay vì persistent | Thiết bị công nghiệp Siemens thường không giữ idle TCP. Pattern connect-per-transaction phù hợp hơn |
 | LOGO! FC5 gửi nhưng output không phản hồi | Ghi vào M1-M4 (Coil 8257+) thay vì V0.4-V0.7 (Coil 5-8) | Đổi `LOGO_M_ADDR` từ 8256 về 4 | Đọc kỹ tài liệu: M1-M4 là đường Web UI nội bộ, V0.4-V0.7 mới là đường Kramer/API |
 | HTTP keep-alive: response body rỗng (200 OK nhưng không có data) | Buffer/timing bug trong thư viện Ethernet/W5500 khi tái sử dụng socket | Rollback về Connection: close mỗi request | W5500 thư viện embedded không ổn định với HTTP keep-alive reuse |
+| Sáng đến web chết, ping vẫn OK, phải reset ESP32 | Client (browser/kiosk) đóng kết nối trước → socket W5500 kẹt ở `CLOSE_WAIT`. `server.available()` chỉ trả socket có data nên không bao giờ stop() được chúng → tích lũy đến khi cạn cả 8 socket. Ping vẫn OK vì ICMP do phần cứng W5500 xử lý | v3.0.7: `reapDeadSockets()` quét 8 socket mỗi 2s, đóng socket ở `CLOSE_WAIT` (status `0x1C`) không còn data | W5500 không tự thu hồi socket khi remote đóng trước; phải chủ động reap CLOSE_WAIT. `Connection: close` chưa đủ — chỉ xử lý khi server đóng trước |
 
 ---
 

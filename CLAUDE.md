@@ -7,7 +7,7 @@ Hướng dẫn làm việc cho Claude Code trong project này.
 ## Tổng quan nhanh
 
 Hệ thống điều khiển đèn + điều hòa văn phòng qua LAN nội bộ.
-- **ESP32 + W5500** (`192.168.1.180`): Web server port 80, SPA UI, HTTP API gateway — firmware `Code_ESP32_Web_UI_TCP_client_.ino` v3.0.5
+- **ESP32 + W5500** (`192.168.1.180`): Web server port 80, SPA UI, HTTP API gateway — firmware `Code_ESP32_Web_UI_TCP_client_.ino` v3.0.7
 - **MEGA2560 + W5500** (`192.168.1.178`): TCP server port 9000, 16 relay RS485 — firmware `Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino` v1.5.0
 - **LOGO! 8** (`192.168.1.6:504`): Modbus TCP, 4 điều hòa
 - **AMX CE-IO4** (`192.168.1.7:44197`): 4 công tắc tường (input)
@@ -24,6 +24,7 @@ Chi tiết đầy đủ: xem `DESIGN.md`.
 - Giao diện web là **SPA** (Single Page Application) — 1 HTTP response duy nhất, JS chuyển tab không reload trang → không tốn socket mới mỗi lần chuyển tab.
 - CE-IO4 dùng **persistent connection** (`amxIoClient`) — không đóng/mở lại để tránh tích lũy TIME_WAIT.
 - MEGA và LOGO! dùng **connect-per-transaction** — mở→gửi→đóng mỗi lần, vì chúng không giữ idle TCP.
+- **Socket reaper** (`reapDeadSockets()`, v3.0.7) — quét 8 socket mỗi 2s, đóng socket kẹt `CLOSE_WAIT` (status `0x1C`). Bắt buộc: client đóng kết nối trước → socket kẹt CLOSE_WAIT → `server.available()` không trả về → cạn dần 8 socket → web chết nhưng ping OK. KHÔNG xóa hàm này.
 
 ### Những thứ KHÔNG làm lại
 - **KHÔNG** dùng HTTP keep-alive trên W5500 — response body rỗng dù header đúng.
