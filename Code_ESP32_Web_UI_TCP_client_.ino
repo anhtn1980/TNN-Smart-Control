@@ -1348,9 +1348,9 @@ void handleWebRequest(EthernetClient client) {
       }
 
       // ── hiển thị tab (bitmask) ──
-      int tb = getParam("tabs");
-      if (tb >= 0) {
-        tabVis = (uint8_t)(tb & 0x1F) | 0x10;  // ép bit4 (Cài đặt) luôn hiện
+      int tabBits = getParam("tabs");
+      if (tabBits >= 0) {
+        tabVis = (uint8_t)(tabBits & 0x1F) | 0x10;  // ép bit4 (Cài đặt) luôn hiện
         Preferences prefs;
         prefs.begin("tnn", false);
         prefs.putUChar("tab_vis", tabVis);
