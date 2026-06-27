@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v3.1.0 — 2026-06-27
+> Lần cập nhật gần nhất: v3.2.0 — 2026-06-27
 
 ---
 
@@ -43,7 +43,7 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 | Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.1.0 / 192.168.1.180 |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.2.0 / 192.168.1.180 |
 | MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
 | LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
 | AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |

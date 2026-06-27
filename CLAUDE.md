@@ -7,7 +7,7 @@ Hướng dẫn làm việc cho Claude Code trong project này.
 ## Tổng quan nhanh
 
 Hệ thống điều khiển đèn + điều hòa văn phòng qua LAN nội bộ.
-- **ESP32 + W5500** (`192.168.1.180`): Web server port 80, SPA UI, HTTP API gateway — firmware `Code_ESP32_Web_UI_TCP_client_.ino` v3.1.0
+- **ESP32 + W5500** (`192.168.1.180`): Web server port 80, SPA UI, HTTP API gateway — firmware `Code_ESP32_Web_UI_TCP_client_.ino` v3.2.0
 - **MEGA2560 + W5500** (`192.168.1.178`): TCP server port 9000, 16 relay RS485 — firmware `Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino` v1.5.0
 - **LOGO! 8** (`192.168.1.6:504`): Modbus TCP, 4 điều hòa
 - **AMX CE-IO4** (`192.168.1.7:44197`): 4 công tắc tường (input)
@@ -80,7 +80,7 @@ Namespace `"tnn"`, các key hiện tại:
 | `sched_h` | uint8 | 18 | Giờ tắt |
 | `sched_m` | uint8 | 0 | Phút tắt |
 | `auth_p` | String | "123456" | Mật khẩu đăng nhập |
-| `tab_vis` | uint8 | 0x0F | Bitmask hiện tab (bit0=Đèn,1=Điều hòa,2=AMX,3=KIOS) |
+| `tab_vis` | uint8 | 0x1F | Bitmask hiện tab (bit0=Đèn MEGA,1=Điều hòa,2=Đèn AMX,3=KIOS,4=Đèn M&A) |
 
 ---
 

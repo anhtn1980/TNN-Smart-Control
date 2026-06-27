@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.1.0"
+#define FW_VERSION "3.2.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -138,8 +138,9 @@ struct ScheduleEntry { uint8_t hour; uint8_t minute; };
 ScheduleEntry schedEntry = {18, 0};  // mặc định 18:00
 bool schedEnabled = true;            // bật/tắt scheduler qua UI
 
-// Hiển thị tab nav (bit0=Đèn, bit1=Điều hòa, bit2=AMX, bit3=KIOS). Cài đặt luôn hiện.
-uint8_t tabVisible = 0x0F;           // mặc định hiện tất cả
+// Hiển thị tab nav (bit0=Đèn MEGA, bit1=Điều hòa, bit2=Đèn AMX, bit3=KIOS, bit4=Đèn M&A).
+// Cài đặt luôn hiện.
+uint8_t tabVisible = 0x1F;           // mặc định hiện tất cả 5 tab
 #define SCHEDULE_WINDOW_S 300   // chạy nếu boot lên trong vòng 5 phút sau mốc
 
 EthernetUDP ntpUdp;
@@ -695,23 +696,23 @@ void handleWebRequest(EthernetClient client) {
 
     // ── NAV BAR ──
     client.println("<div class='nav'>");
-    const char* navIcons[4] = {"🔌","❄️","🧩","🖥️"};
-    const char* navNames[4] = {"Đèn","Điều hòa","AMX","KIOS"};
-    for (int i = 0; i < 4; i++) {
+    const char* navIcons[5] = {"🔌","❄️","🧩","🖥️","💡"};
+    const char* navNames[5] = {"Đèn MEGA","Điều hòa LOGO!","Đèn AMX","KIOS","Đèn M&A"};
+    for (int i = 0; i < 5; i++) {
       client.print("<button class='nav-btn' id='nb"); client.print(i);
       client.print("' onclick='nav("); client.print(i); client.print(")'");
       if (!((tabVisible >> i) & 1)) client.print(" style='display:none'");
       client.print(">"); client.print(navIcons[i]); client.print("<br>");
       client.print(navNames[i]); client.println("</button>");
     }
-    client.println("<button class='nav-btn' id='nb4' onclick='nav(4)'>⚙️<br>Cài đặt</button>");
+    client.println("<button class='nav-btn' id='nb5' onclick='nav(5)'>⚙️<br>Cài đặt</button>");
     client.println("<div class='nav-right'><span id='clk'>--:--:--</span>"
                    "<button class='logout-btn' onclick=\"location='/logout'\">Thoát</button></div>");
     client.println("</div>");
 
     // ── PAGE 0: MEGA ──
     client.println("<div class='page' id='p0'>");
-    client.println("<div class='top'><h2>🔌 MEGA CONTROL</h2><button class='info-btn' onclick='ti(0)'>ℹ️</button></div>");
+    client.println("<div class='top'><h2>🔌 ĐÈN MEGA</h2><button class='info-btn' onclick='ti(0)'>ℹ️</button></div>");
     client.println("<div class='info-panel' id='i0'>");
     client.println("Browser → <code>ESP32 :80</code> → TCP :9000 → <code>MEGA 192.168.1.178</code> → RS485 → Board relay 16 kênh<br>Connect-per-transaction: mỗi lệnh mở TCP mới, gửi, đọc, đóng.");
     client.println("<div class='cfg'><span class='k'>MEGA IP</span><span class='v'>192.168.1.178:9000</span>");
@@ -727,7 +728,7 @@ void handleWebRequest(EthernetClient client) {
 
     // ── PAGE 1: MODBUS / AC ──
     client.println("<div class='page' id='p1'>");
-    client.println("<div class='top'><h2>❄️ ĐIỀU HÒA (LOGO! 8)</h2><button class='info-btn' onclick='ti(1)'>ℹ️</button></div>");
+    client.println("<div class='top'><h2>❄️ ĐIỀU HÒA LOGO!</h2><button class='info-btn' onclick='ti(1)'>ℹ️</button></div>");
     client.println("<div class='info-panel' id='i1'>");
     client.println("Browser → <code>ESP32 :80</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4<br>");
     client.println("Pulse pattern: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. Feedback: đọc V0.0-V0.3 (FC1).");
@@ -743,7 +744,7 @@ void handleWebRequest(EthernetClient client) {
 
     // ── PAGE 2: AMX ──
     client.println("<div class='page' id='p2'>");
-    client.println("<div class='top'><h2>🧩 AMX CONTROL</h2><button class='info-btn' onclick='ti(2)'>ℹ️</button></div>");
+    client.println("<div class='top'><h2>🧩 ĐÈN AMX</h2><button class='info-btn' onclick='ti(2)'>ℹ️</button></div>");
     client.println("<div class='info-panel' id='i2'>");
     client.println("Mỗi lần công tắc tường <b>thay đổi</b> → toggle relay. Chờ 300ms nhường Kramer → đọc relay thật → toggle nếu chưa đổi.");
     client.println("<div class='cfg'><span class='k'>CE-IO4</span><span class='v'>192.168.1.7:44197 (poll 600ms)</span>");
@@ -778,7 +779,23 @@ void handleWebRequest(EthernetClient client) {
                    "<span style='color:#94a3b8;font-size:13px'>Đang tải...</span></div>");
     client.println("<iframe id='kf' class='kios-frame' src='' onload='kHideLoad()'></iframe></div>");
 
-    // ── PAGE 4: SETTINGS ──
+    // ── PAGE 4: ĐÈN MEGA & AMX (ghép) ──
+    // Giao diện giống "Đèn MEGA"; nút C3/C10/C7/C2 hoạt động theo logic AMX (CE-REL8).
+    client.println("<div class='page' id='pc'>");
+    client.println("<div class='top'><h2>💡 ĐÈN MEGA & AMX</h2></div>");
+    client.println("<div class='grid16'>");
+    // Dùng lại mảng tên MEGA; 4 vị trí 3,10,7,2 sẽ mang logic AMX (đánh dấu data-amx)
+    for (int i = 1; i <= 16; i++) {
+      int amxCh = (i==3)?1:(i==10)?2:(i==7)?3:(i==2)?4:0;  // 0 = nút MEGA thường
+      client.print("<button id='C"); client.print(i); client.print("'");
+      if (amxCh) { client.print(" data-amx='"); client.print(amxCh); client.print("'"); }
+      client.print(">"); client.print(i); client.print(". "); client.print(names[i-1]);
+      client.println("</button>");
+    }
+    client.println("<button id='CALL' style='background:#6a1a1a;grid-column:1/-1'>🔴 TẮT TẤT CẢ</button></div>");
+    client.println("<div class='sbar' id='sbc'>Đang tải...</div></div>");
+
+    // ── PAGE 5: SETTINGS ──
     client.println("<div class='page' id='p4'><div class='settings-wrap'>");
     // Info card — luôn hiện. Nhấn tiêu đề 5 lần liên tiếp để mở phần cài đặt ẩn.
     client.println("<div class='setting-card'>");
@@ -815,8 +832,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("<div class='setting-card'>");
     client.println("<h3>👁️ Hiển thị tab</h3>");
     client.println("<div class='sdet' style='display:none'>");
-    const char* tvNames[4] = {"🔌 Đèn","❄️ Điều hòa","🧩 AMX","🖥️ KIOS"};
-    for (int i = 0; i < 4; i++) {
+    const char* tvNames[5] = {"🔌 Đèn MEGA","❄️ Điều hòa LOGO!","🧩 Đèn AMX","🖥️ KIOS","💡 Đèn M&A"};
+    for (int i = 0; i < 5; i++) {
       client.print("<div class='setting-row'><label>"); client.print(tvNames[i]);
       client.print("</label><label class='toggle'><input type='checkbox' id='tv"); client.print(i);
       client.println("'><span class='slider'></span></label></div>");
@@ -845,13 +862,14 @@ void handleWebRequest(EthernetClient client) {
     // ── JAVASCRIPT ──
     client.println("<script>");
     // navigation
-    client.println("var pages=5,cur=0;");
+    client.println("var pages=6,cur=0;");
     client.println("function nav(i){");
     client.println("  document.querySelectorAll('.page').forEach(function(p,j){p.classList.toggle('active',j===i);});");
     client.println("  document.querySelectorAll('.nav-btn').forEach(function(b,j){b.classList.toggle('active',j===i);});");
     client.println("  cur=i;");
     client.println("  if(i===3&&!document.getElementById('kf').src)kLoad(0);");
-    client.println("  if(i===4){loadSched();syncInfo();}");
+    client.println("  if(i===4)pollCombo();");
+    client.println("  if(i===5){loadSched();syncInfo();}");
     client.println("}");
     // info panel toggle
     client.println("function ti(n){var p=document.getElementById('i'+n);p.style.display=p.style.display==='block'?'none':'block';}");
@@ -876,6 +894,22 @@ void handleWebRequest(EthernetClient client) {
     client.println("function amxToggle(ch){var b=document.getElementById('R'+ch);var on=(ch in pendingR)?pendingR[ch]:b.classList.contains('on');var next=!on;pendingR[ch]=next;b.classList.toggle('on',next);fetch('/amx/relay?ch='+ch+'&value='+next).then(function(){setTimeout(pollAMX,300);}).catch(function(){setTimeout(pollAMX,500);});}");
     client.println("function pollAMX(){fetch('/amx/status').then(function(r){return r.json();}).then(function(d){d.relay.forEach(function(v,i){var b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingR[i+1]=!!v;}});d.io.forEach(function(v,i){var el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});document.getElementById('sb2').innerText='Cập nhật: '+new Date().toLocaleTimeString();_fC=0;}).catch(function(){if(++_fC>=2)document.getElementById('sb2').innerText='Lỗi kết nối AMX';});}");
 
+    // ── COMBINED (Đèn MEGA & AMX) logic ──
+    //   12 nút thường = MEGA (/cmd + /status); 4 nút data-amx = AMX (/amx/relay + /amx/status).
+    //   Poll TUẦN TỰ: /status xong mới /amx/status → mỗi lúc chỉ 1 HTTP socket inbound.
+    client.println("var pendingC={},_amxPos=[3,10,7,2];");  // relay AMX ch1..4 → vị trí nút 3,10,7,2
+    client.println("for(var _c=1;_c<=16;_c++){(function(i){var b=document.getElementById('C'+i);if(!b)return;var amx=b.getAttribute('data-amx');");
+    client.println("  if(amx){var ch=parseInt(amx);b.onclick=function(){var next=!b.classList.contains('on');b.classList.toggle('on',next);fetch('/amx/relay?ch='+ch+'&value='+next).then(function(){setTimeout(pollCombo,300);}).catch(function(){setTimeout(pollCombo,500);});};}");
+    client.println("  else{b.onclick=function(){var k='C'+i,cur=(k in pendingC)?pendingC[k]:b.classList.contains('on'),next=!cur;pendingC[k]=next;b.classList.toggle('on',next);fetch('/cmd?c='+encodeURIComponent('set /relay/'+i+'/state '+(next?'true':'false'))).then(function(){setTimeout(pollCombo,80);}).catch(function(){setTimeout(pollCombo,150);});};}");
+    client.println("}(_c));}");
+    client.println("document.getElementById('CALL').onclick=function(){pendingC={};fetch('/cmd?c='+encodeURIComponent('set /system/all off'));[1,2,3,4].forEach(function(ch,idx){setTimeout(function(){fetch('/amx/relay?ch='+ch+'&value=false');},150*(idx+1));});setTimeout(pollCombo,800);};");
+    client.println("function pollCombo(){fetch('/status').then(function(r){return r.text();}).then(function(t){");
+    client.println("  t.split(',').forEach(function(p){var kv=p.trim().split('=');if(kv.length!=2)return;var n=kv[0].trim().replace('L','');var b=document.getElementById('C'+n);if(!b||b.getAttribute('data-amx'))return;var on=(kv[1].trim()==='1');b.classList.toggle('on',on);pendingC['C'+n]=on;});");
+    client.println("  return fetch('/amx/status');}).then(function(r){return r.json();}).then(function(d){");
+    client.println("  d.relay.forEach(function(v,i){var b=document.getElementById('C'+_amxPos[i]);if(b)b.classList.toggle('on',!!v);});");
+    client.println("  document.getElementById('sbc').innerText='Cập nhật: '+new Date().toLocaleTimeString();_fC=0;");
+    client.println("}).catch(function(){if(++_fC>=2)document.getElementById('sbc').innerText='Lỗi kết nối';});}");
+
     // ── KIOS logic ──
     client.println("var kSites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
     client.println("var kfr=document.getElementById('kf'),kinp=document.getElementById('url-input'),kub=document.getElementById('kurl');");
@@ -895,7 +929,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("function syncInfo(){fetch('/info').then(function(r){return r.json();}).then(function(d){");
     client.println("  var p=(''+d.time).split(':');if(p.length===3){_h=+p[0];_m=+p[1];_s=+p[2];_have=true;}");
     client.println("  document.getElementById('clk').innerText=d.time;");
-    client.println("  if(cur===4){");
+    client.println("  if(cur===5){");
     client.println("    var ns=document.getElementById('ntp-status');");
     client.println("    if(ns)ns.innerText=d.ntp?'✅ Đồng bộ':'❌ Chưa sync';");
     client.println("    var up=document.getElementById('uptime');");
@@ -912,7 +946,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("  document.getElementById('sched-m').value=String(d.min).padStart(2,'0');");
     client.println("  var s=document.getElementById('sched-status');");
     client.println("  s.innerText=d.enabled?'Lịch BẬT — tắt lúc '+String(d.hour).padStart(2,'0')+':'+String(d.min).padStart(2,'0'):'Lịch TẮT';");
-    client.println("  if(typeof d.tabs==='number'){for(var i=0;i<4;i++){var t=document.getElementById('tv'+i);if(t)t.checked=!!((d.tabs>>i)&1);}}");
+    client.println("  if(typeof d.tabs==='number'){for(var i=0;i<5;i++){var t=document.getElementById('tv'+i);if(t)t.checked=!!((d.tabs>>i)&1);}}");
     client.println("}).catch(function(){});}");
     client.println("function saveSched(){");
     client.println("  var en=document.getElementById('sched-en').checked?1:0;");
@@ -923,9 +957,9 @@ void handleWebRequest(EthernetClient client) {
     client.println("  .then(function(){loadSched();document.getElementById('sched-status').innerText='✅ Đã lưu!';})");
     client.println("  .catch(function(){document.getElementById('sched-status').innerText='❌ Lỗi lưu';});}");
     client.println("function saveTabs(){");
-    client.println("  var t=0;for(var i=0;i<4;i++){if(document.getElementById('tv'+i).checked)t|=(1<<i);}");
+    client.println("  var t=0;for(var i=0;i<5;i++){if(document.getElementById('tv'+i).checked)t|=(1<<i);}");
     client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'tabs='+t})");
-    client.println("  .then(function(){for(var i=0;i<4;i++){var b=document.getElementById('nb'+i);if(b)b.style.display=document.getElementById('tv'+i).checked?'':'none';}");
+    client.println("  .then(function(){for(var i=0;i<5;i++){var b=document.getElementById('nb'+i);if(b)b.style.display=document.getElementById('tv'+i).checked?'':'none';}");
     client.println("    document.getElementById('tabs-status').innerText='✅ Đã lưu!';})");
     client.println("  .catch(function(){document.getElementById('tabs-status').innerText='❌ Lỗi lưu';});}");
     client.println("function changePass(){");
@@ -947,12 +981,12 @@ void handleWebRequest(EthernetClient client) {
     client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=3){_itap=0;_secretOn=!_secretOn;document.querySelectorAll('.sdet').forEach(function(e){e.style.display=_secretOn?'block':'none';});}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
 
     // ── polling master ──
-    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
+    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();else if(cur===4)pollCombo();}");
     // Cập nhật uptime/NTP tại tab Cài đặt qua syncInfo() (mỗi 30s) — không reload form lịch tự động
     client.println("setInterval(masterPoll,2000);");
     // Khởi động — vào tab hiển thị đầu tiên (nếu Đèn bị ẩn thì chọn tab kế)
-    int firstTab = 4;
-    for (int i = 0; i < 4; i++) { if ((tabVisible >> i) & 1) { firstTab = i; break; } }
+    int firstTab = 5;
+    for (int i = 0; i < 5; i++) { if ((tabVisible >> i) & 1) { firstTab = i; break; } }
     client.print("nav("); client.print(firstTab); client.println(");masterPoll();syncInfo();");
     client.println("</script></body></html>");
     client.stop(); return;
@@ -1359,7 +1393,7 @@ void handleWebRequest(EthernetClient client) {
       // ── hiển thị tab (nếu có) ──
       int tabs = getParam("tabs");
       if (tabs >= 0) {
-        tabVisible = (uint8_t)(tabs & 0x0F);
+        tabVisible = (uint8_t)(tabs & 0x1F);
         Preferences prefs;
         prefs.begin("tnn", false);
         prefs.putUChar("tab_vis", tabVisible);
@@ -1435,7 +1469,7 @@ void setup() {
     schedEntry.hour   = prefs.getUChar("sched_h", 18);
     schedEntry.minute = prefs.getUChar("sched_m", 0);
     authPass          = prefs.getString("auth_p", AUTH_PASS_DEFAULT);
-    tabVisible        = prefs.getUChar("tab_vis", 0x0F);
+    tabVisible        = prefs.getUChar("tab_vis", 0x1F);
     prefs.end();
     Serial.printf("Settings loaded: sched=%s %02d:%02d\n",
                   schedEnabled ? "ON" : "OFF", schedEntry.hour, schedEntry.minute);

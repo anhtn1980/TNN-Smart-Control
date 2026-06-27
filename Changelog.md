@@ -41,6 +41,18 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.2.0] - 2026-06-27
+Đổi tên tab + thêm trang ghép "Đèn MEGA & AMX".
+
+- **Đổi tên tab**: "Đèn" → "Đèn MEGA", "Điều hòa" → "Điều hòa LOGO!", "AMX" → "Đèn AMX".
+- **Trang mới "Đèn M&A"**: giao diện 16 nút giống hệt "Đèn MEGA", nhưng 4 vị trí điều khiển theo logic AMX (CE-REL8) thay vì MEGA:
+  - Nút `3. P.Họp` → AMX Relay 1, `10. P.Tuấn` → Relay 2, `7. K.Doanh` → Relay 3, `2. H.Lang` → Relay 4.
+  - 12 nút còn lại hoạt động như relay MEGA bình thường.
+  - 4 nút đánh dấu `data-amx`; click gọi `/amx/relay`, 12 nút kia gọi `/cmd`.
+  - "TẮT TẤT CẢ": tắt 16 relay MEGA (`/system/all off`) + tắt 4 relay AMX.
+- **Poll tuần tự** trên trang ghép: `/status` (rẻ, cache) xong mới `/amx/status` → mỗi lúc chỉ 1 HTTP socket inbound, tránh va chạm 8 socket W5500. Khi rời trang: 0 tải thêm.
+- Trang ghép có toggle ẩn/hiện trong "Hiển thị tab" (bit4). Bitmask `tab_vis` mở rộng 4→5 bit, mặc định `0x1F`. Bit0-3 giữ nguyên ý nghĩa cũ (không xáo trộn NVS).
+
 ### [3.1.0] - 2026-06-27
 Fix "Lỗi kết nối" nhấp nháy trên điện thoại + giảm tải request lên W5500.
 
