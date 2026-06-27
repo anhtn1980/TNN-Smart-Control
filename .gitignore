@@ -1,0 +1,3 @@
+# Bản HTML render tự động từ .md (build artifact) — sinh bằng tools/build-docs.py
+# Không commit để tránh lệch bản với .md nguồn. Chạy lại script để tạo khi cần đọc.
+docs-html/

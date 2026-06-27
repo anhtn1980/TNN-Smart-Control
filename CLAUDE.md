@@ -118,3 +118,12 @@ Namespace `"tnn"`, các key hiện tại:
 - Không push vào `main` trực tiếp.
 - Commit message: `feat`/`fix`/`docs` + mô tả ngắn + version nếu có.
 - Sau mỗi nhóm thay đổi lớn: cập nhật `Changelog.md` và `DESIGN.md`.
+
+---
+
+## Tài liệu
+
+- Nguồn tài liệu là các file `.md` ở thư mục gốc — đây là bản chính, đọc/sửa ở đây.
+- `tools/build-docs.py` sinh bản HTML đọc đẹp (trình duyệt) từ `.md` → thư mục `docs-html/`.
+- `docs-html/` là **build artifact, đã gitignore — KHÔNG đọc/sửa tay**. Sửa `.md` rồi chạy lại `python3 tools/build-docs.py`.
+- `HuongDanSuDung.html` là tài liệu viết tay cho người dùng cuối, không phải bản sinh — khác với `docs-html/`.
