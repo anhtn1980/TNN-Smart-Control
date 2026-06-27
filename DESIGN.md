@@ -394,6 +394,7 @@ HuongDanSuDung.doc                                      Hướng dẫn sử dụ
 - Đổi mật khẩu qua Settings tab, lưu NVS (key `auth_p`), xác nhận mật khẩu cũ — v3.0.2
 - Fix: lịch/giờ không lưu được do `loadSched()` ghi đè form mỗi 2s — v3.0.2
 - Form đổi mật khẩu ẩn sau easter egg: nhấn tiêu đề "Thông tin hệ thống" 5 lần — v3.0.5
+- Cấu hình hiển thị tab nav (ẩn/hiện từng tab), lưu NVS `tab_vis` (bitmask), render server-side → mọi trình duyệt hội tụ 1 cấu hình; form ẩn mở bằng nhấn tiêu đề 3 lần; tab Cài đặt luôn hiện — v3.1.0
 - Nút Đăng xuất trên nav bar — v3.0.0
 
 ### Còn hạn chế / chưa xác nhận 🔲

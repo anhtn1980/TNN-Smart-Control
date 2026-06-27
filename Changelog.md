@@ -41,6 +41,16 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.1.0] - 2026-06-27
+Thêm cấu hình hiển thị tab (ẩn/hiện từng tab trên thanh nav), lưu vĩnh viễn vào NVS.
+
+- **Lưu trữ**: NVS key `tab_vis` (uint8 bitmask, namespace `"tnn"`). bit0=Đèn, bit1=Điều hòa, bit2=AMX, bit3=KIOS, bit4=Cài đặt. Mặc định `0x1F` (hiện tất cả). Tồn tại qua reboot ESP32.
+- **Hội tụ 1 cấu hình**: server render thanh nav theo `tabVis` và trả `tabs` trong `/settings` (GET) → mọi trình duyệt/kiosk đều thấy cùng một cấu hình, không phụ thuộc localStorage từng máy.
+- **Form ẩn**: card "🗂️ Hiển thị tab" trong tab Cài đặt, mở bằng cách nhấn tiêu đề "Thông tin hệ thống" **3 lần** liên tiếp (đổi mật khẩu vẫn là 5 lần).
+- **An toàn**: bit4 (Cài đặt) bị ép luôn = 1 (cả khi lưu lẫn khi nạp từ NVS) → không bao giờ tự khóa mình ra khỏi form cấu hình.
+- Tab bị ẩn vẫn nằm trong DOM (giữ nguyên index `nav(i)`), chỉ ẩn nút nav bằng `display:none`. Khởi động nhảy vào tab hiển thị đầu tiên (`firstTab()`) thay vì cố định tab 0.
+- Endpoint `POST /settings` nhận thêm tham số `tabs=<bitmask>`.
+
 ### [3.0.7] - 2026-06-27
 Fix lỗi nghiêm trọng: sáng đến web ESP32 chết, ping vẫn OK, phải reset mới vào lại.
 

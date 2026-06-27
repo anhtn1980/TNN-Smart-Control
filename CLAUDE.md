@@ -67,6 +67,7 @@ Không có unit test. Test thực tế:
 - Biến `authPass` đọc từ NVS khi boot (namespace `"tnn"`, key `auth_p"`, default `"123456"`).
 - Token `authToken` tạo mới mỗi lần reboot — mọi session cũ tự hết hạn sau reboot.
 - Form đổi mật khẩu ẩn trong tab Cài đặt — nhấn tiêu đề "Thông tin hệ thống" 5 lần liên tiếp.
+- Form cấu hình hiển thị tab ẩn trong tab Cài đặt — nhấn tiêu đề "Thông tin hệ thống" 3 lần liên tiếp.
 
 ---
 
@@ -80,6 +81,7 @@ Namespace `"tnn"`, các key hiện tại:
 | `sched_h` | uint8 | 18 | Giờ tắt |
 | `sched_m` | uint8 | 0 | Phút tắt |
 | `auth_p` | String | "123456" | Mật khẩu đăng nhập |
+| `tab_vis` | uint8 | 0x1F | Bitmask hiển thị tab nav (bit0=Đèn…bit4=Cài đặt; bit4 luôn=1) |
 
 ---
 
