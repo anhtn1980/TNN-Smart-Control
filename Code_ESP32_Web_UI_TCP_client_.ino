@@ -1,8 +1,10 @@
 #include <SPI.h>
 #include <Ethernet.h>
+#include <EthernetUdp.h>
+#include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "2.0.1"
+#define FW_VERSION "3.0.6"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -24,15 +26,73 @@ const int megaPort = 9000;
 // v2.0.0: timeout chờ MEGA phản hồi — MEGA có thể delay tối đa ~120ms (readIO x2)
 #define MEGA_TIMEOUT_MS 300
 
+/* ===== AMX CONFIG ===== */
+const char* amxIoIP    = "192.168.1.7";    // CE-IO4
+const char* amxRelayIP = "192.168.1.204";  // CE-REL8
+const int   amxPort    = 44197;
+#define AMX_TRANSACT_TIMEOUT_MS 150
+
 /* ===== LOGO! MODBUS TCP CONFIG ===== */
 const char* logoIP = "192.168.1.6";
-const int   logoPort = 502;
+const int   logoPort = 504;
 #define LOGO_UNIT_ID        1
 #define LOGO_M_ADDR         4
 #define LOGO_FB_ADDR        0
 #define LOGO_PULSE_MS       500
 #define LOGO_COOLDOWN_MS    1500
 #define LOGO_MODBUS_TIMEOUT_MS 200
+
+/* ===== AUTH (cookie-based, password only) ===== */
+#define AUTH_PASS_DEFAULT "123456"
+static String authPass  = AUTH_PASS_DEFAULT;  // đọc từ NVS khi boot
+// Token ngẫu nhiên được tạo lúc boot (millis-based) — đổi mỗi lần ESP32 khởi động
+static String authToken = "";
+
+void initAuthToken() {
+  // Tạo token đơn giản từ millis + hằng số — đủ cho mạng nội bộ/NAT
+  unsigned long seed = millis() ^ 0xDEADBEEF;
+  authToken = String(seed, HEX);
+}
+
+bool checkCookie(const String& req) {
+  int idx = req.indexOf("Cookie:");
+  if (idx < 0) return false;
+  int end = req.indexOf("\r\n", idx);
+  String cookies = req.substring(idx + 7, end);
+  return cookies.indexOf("sid=" + authToken) >= 0;
+}
+
+void serveLoginPage(EthernetClient& client, bool wrongPass) {
+  client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n");
+  client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>TNN Smart Control</title>"
+    "<style>"
+    "body{margin:0;display:flex;align-items:center;justify-content:center;"
+    "height:100vh;background:#1a1a2e;font-family:Arial,sans-serif;}"
+    ".box{background:#fff;border-radius:12px;padding:40px 36px;width:300px;"
+    "box-shadow:0 8px 32px rgba(0,0,0,.4);text-align:center;}"
+    ".box h2{margin:0 0 8px;color:#1a3a5c;font-size:20px;}  "
+    ".box p{margin:0 0 24px;color:#888;font-size:13px;}"
+    "input[type=password]{width:100%;box-sizing:border-box;padding:12px 14px;"
+    "font-size:16px;border:2px solid #ddd;border-radius:8px;outline:none;}"
+    "input[type=password]:focus{border-color:#1a3a5c;}"
+    "button{margin-top:16px;width:100%;padding:12px;background:#1a3a5c;"
+    "color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;}"
+    "button:hover{background:#2c5f8a;}"
+    ".err{color:#e53935;font-size:13px;margin-top:12px;}"
+    "</style></head><body>"
+    "<div class='box'>"
+    "<h2>TNN Smart Control</h2>"
+    "<p>Nhập mật khẩu để tiếp tục</p>"
+    "<form method='POST' action='/login'>"
+    "<input type='password' name='p' placeholder='Mật khẩu' autofocus></input>"
+    "<button type='submit'>Đăng nhập</button>"
+    "</form>");
+  if (wrongPass) client.println("<div class='err'>Sai mật khẩu, thử lại.</div>");
+  client.println("</div></body></html>");
+  client.stop();
+}
 
 /* ===== SERVER ===== */
 EthernetServer server(80);
@@ -42,6 +102,145 @@ EthernetServer server(80);
 // Mỗi lệnh relay: connect → gửi → đọc response → disconnect. Không bao giờ stale.
 String globalStatus = "";
 uint8_t acSnapshot = 0;
+
+/* ===== AMX STATE ===== */
+uint8_t amxRelaySnapshot = 0;  // bits 0-3: relay 1-4
+uint8_t amxInputSnapshot = 0;  // bits 0-3: IO 1-4
+
+// Toggle: mỗi lần công tắc tường đổi trạng thái (bất kể chiều) → toggle relay tương ứng.
+// Delay 500ms nhường Kramer phản hồi trước — nếu Kramer đã toggle thì relay đã đúng,
+// ESP32 toggle thêm lần nữa sẽ sai → đọc relay thật trước khi toggle để tránh.
+// Sau delay, đọc relay thật: nếu trạng thái relay chưa thay đổi so với trước khi IO đổi
+// → Kramer chưa phản hồi → ESP32 toggle. Nếu relay đã thay đổi → Kramer đã xử lý → bỏ qua.
+bool          amxNeedsReconcile = false;
+unsigned long amxReconcileAfter = 0;
+uint8_t       amxPendingToggle  = 0;
+uint8_t       amxRelayBeforeIO  = 0;
+#define AMX_RECONCILE_DELAY_MS 300
+
+// Persistent connection tới CE-IO4 — tránh mở/đóng socket liên tục làm cạn W5500
+EthernetClient amxIoClient;
+String         amxIoRxBuf      = "";
+unsigned long  amxIoLastOk     = 0;      // lần cuối nhận được response hợp lệ
+#define AMX_IO_RECONNECT_MS    5000      // thử kết nối lại nếu mất 5 giây
+#define AMX_IO_POLL_INTERVAL_MS 600
+
+/* ===== NTP + SCHEDULER ===== */
+// NTP server — dùng IP router nội bộ nếu router có NTP relay, hoặc pool.ntp.org
+static const char NTP_SERVER[] = "216.239.35.0";  // time.google.com (IP cố định)
+#define NTP_PORT          123
+#define TZ_OFFSET_SEC     25200   // UTC+7 (Việt Nam)
+#define NTP_RESYNC_MS     21600000UL  // re-sync mỗi 6 tiếng
+#define NTP_RETRY_MS      30000       // retry nếu chưa sync được
+
+// Scheduler — có thể thay đổi qua giao diện Settings
+struct ScheduleEntry { uint8_t hour; uint8_t minute; };
+ScheduleEntry schedEntry = {18, 0};  // mặc định 18:00
+bool schedEnabled = true;            // bật/tắt scheduler qua UI
+#define SCHEDULE_WINDOW_S 300   // chạy nếu boot lên trong vòng 5 phút sau mốc
+
+EthernetUDP ntpUdp;
+bool    ntpSynced       = false;
+unsigned long ntpEpoch  = 0;   // Unix timestamp lúc sync
+unsigned long ntpMillis = 0;   // millis() lúc sync
+unsigned long lastNtpAttempt = 0;
+
+// Theo dõi mốc nào đã kích hoạt hôm nay (bit mask theo index SCHEDULE[])
+uint8_t schedFiredToday = 0;
+int     schedLastDay    = -1;
+
+// Lấy Unix timestamp hiện tại (UTC+7)
+unsigned long nowEpochLocal() {
+  if (!ntpSynced) return 0;
+  return ntpEpoch + (millis() - ntpMillis) / 1000;
+}
+
+// Tách giờ/phút/ngày từ epoch local
+void epochToHMS(unsigned long ep, uint8_t &h, uint8_t &m, uint8_t &s, int &day) {
+  ep %= 86400UL * 36525UL;   // tránh overflow
+  day = (int)(ep / 86400);
+  unsigned long tod = ep % 86400;
+  h = tod / 3600;
+  m = (tod % 3600) / 60;
+  s = tod % 60;
+}
+
+// Gửi NTP request và đọc response — blocking tối đa 1.5s
+bool ntpSync() {
+  uint8_t buf[48];
+  memset(buf, 0, 48);
+  buf[0] = 0b11100011;  // LI=3, VN=4, Mode=3 (client)
+  buf[1] = 0; buf[2] = 6; buf[3] = 0xEC;
+  buf[12] = 49; buf[13] = 0x4E; buf[14] = 49; buf[15] = 52;
+
+  ntpUdp.begin(NTP_PORT);
+  ntpUdp.beginPacket(NTP_SERVER, NTP_PORT);
+  ntpUdp.write(buf, 48);
+  ntpUdp.endPacket();
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 1500) {
+    if (ntpUdp.parsePacket() >= 48) {
+      ntpUdp.read(buf, 48);
+      ntpUdp.stop();
+      unsigned long hi = (unsigned long)buf[40] << 24 | (unsigned long)buf[41] << 16 |
+                         (unsigned long)buf[42] << 8  | buf[43];
+      if (hi < 2208988800UL) { return false; }  // sanity check
+      ntpEpoch  = hi - 2208988800UL + TZ_OFFSET_SEC;
+      ntpMillis = millis();
+      ntpSynced = true;
+      Serial.print("NTP synced: epoch="); Serial.println(ntpEpoch);
+      return true;
+    }
+    yield();
+  }
+  ntpUdp.stop();
+  return false;
+}
+
+// Kiểm tra và chạy scheduler — gọi trong loop() mỗi giây
+void runScheduler() {
+  if (!ntpSynced || !schedEnabled) return;
+  unsigned long ep = nowEpochLocal();
+  uint8_t h, m, s; int day;
+  epochToHMS(ep, h, m, s, day);
+
+  if (day != schedLastDay) { schedFiredToday = 0; schedLastDay = day; }
+
+  if (!bitRead(schedFiredToday, 0)) {
+    int schedSec = schedEntry.hour * 3600 + schedEntry.minute * 60;
+    int nowSec   = h * 3600 + m * 60 + s;
+    int diff = nowSec - schedSec;
+    if (diff >= 0 && diff <= SCHEDULE_WINDOW_S) {
+      bitSet(schedFiredToday, 0);
+      Serial.printf("Scheduler fired %02d:%02d\n", schedEntry.hour, schedEntry.minute);
+      // Tắt 16 relay MEGA (nếu có thiết bị bật)
+      if (globalStatus.indexOf("=1") >= 0)
+        megaTransact("set /system/all off");
+      // Tắt 4 relay AMX CE-REL8
+      for (int ch = 1; ch <= 4; ch++) {
+        if (bitRead(amxRelaySnapshot, ch - 1))
+          amxSetRelay(ch, false);
+      }
+      // Tắt 4 điều hòa LOGO! (nếu đang bật)
+      for (int ch = 0; ch < 4; ch++) {
+        if (bitRead(acSnapshot, ch))
+          logoSendPulse(ch);
+      }
+    }
+  }
+}
+
+// Helper: giờ hiện tại dạng "HH:MM:SS" (dùng cho /info và nav clock)
+String nowTimeStr() {
+  if (!ntpSynced) return "--:--:--";
+  unsigned long ep = nowEpochLocal();
+  uint8_t h, m, s; int day;
+  epochToHMS(ep, h, m, s, day);
+  char buf[9];
+  snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
+  return String(buf);
+}
 
 /* ===== LOGO! PULSE STATE MACHINE ===== */
 struct LogoPulse { bool active; int channel; unsigned long startMs; };
@@ -76,10 +275,8 @@ void resetW5500() {
 bool megaTransact(const String &cmd) {
   EthernetClient c;
   if (!c.connect(megaIP, megaPort)) {
-    Serial.println("MEGA connect fail");
     return false;
   }
-  Serial.println("TX: " + cmd);
   c.print(cmd + "\r\n");
 
   // Đọc response line từ MEGA
@@ -136,6 +333,164 @@ void logoSendPulse(int ch) {
   acCooldownMs[ch] = millis();
 }
 
+bool readACFeedback() {
+  // FC1 Read Coils — đọc V0.0-V0.3 (feedback trạng thái thật từ LOGO!)
+  byte req[12] = {0x00,0x02,0x00,0x00,0x00,0x06,LOGO_UNIT_ID,0x01,
+    (byte)(LOGO_FB_ADDR>>8),(byte)(LOGO_FB_ADDR&0xFF),0x00,0x04};
+  byte resp[10];
+  if (!logoTransact(req, 12, resp, 10)) return false;
+  // resp[9] = coil status byte: bit0=ĐH1, bit1=ĐH2, bit2=ĐH3, bit3=ĐH4
+  acSnapshot = resp[9] & 0x0F;
+  return true;
+}
+
+/* ===== AMX — connect-per-transaction ===== */
+// Gửi nhiều lệnh trong 1 connection, đọc đến maxLines dòng response.
+// Mỗi dòng được trả về qua callback onLine(String&).
+bool amxMultiQuery(const char* deviceIP, const String* cmds, int numCmds,
+                   void (*onLine)(const String&), int maxLines) {
+  EthernetClient c;
+  if (!c.connect(deviceIP, amxPort)) return false;
+  for (int i = 0; i < numCmds; i++) { c.print(cmds[i] + "\n"); }
+  unsigned long t0 = millis(); int got = 0; String line = "";
+  while (got < maxLines && millis() - t0 < AMX_TRANSACT_TIMEOUT_MS) {
+    while (c.available()) {
+      char ch = c.read();
+      if (ch == '\n') { if (line.length()) { onLine(line); got++; } line = ""; }
+      else if (ch != '\r') line += ch;
+    }
+    yield();
+  }
+  c.stop();
+  return got > 0;
+}
+
+void _parseAmxIoLine(const String& line) {
+  // "update /io/N/digitalInput true|false"  (per CE-IO4 manual rev05 p.44)
+  if (!line.startsWith("update /io/")) return;
+  int n = line.charAt(11) - '1';  // '1'→0 .. '4'→3
+  if (n < 0 || n > 3) return;
+  bool newVal = line.endsWith("true");
+  if (bitRead(amxInputSnapshot, n) != newVal) {
+    Serial.printf("IO%d: %s\n", n + 1, newVal ? "ON" : "OFF");
+    bitWrite(amxInputSnapshot, n, newVal);
+    bitWrite(amxPendingToggle, n, true);   // đánh dấu kênh này cần toggle
+    amxRelayBeforeIO = amxRelaySnapshot;   // ghi nhớ trạng thái relay lúc này
+    amxNeedsReconcile = true;
+    amxReconcileAfter = millis() + AMX_RECONCILE_DELAY_MS;
+  }
+}
+
+void _parseAmxRelayLine(const String& line) {
+  // "update /relay/N/state true|false"
+  if (!line.startsWith("update /relay/")) return;
+  int n = line.charAt(14) - '1'; // '1'→0 .. '4'→3
+  if (n < 0 || n > 3) return;
+  bitWrite(amxRelaySnapshot, n, line.endsWith("true"));
+}
+
+// Gửi 4 lệnh get trên persistent connection — không mở/đóng socket.
+// Non-blocking: gửi lệnh rồi trả về ngay, response đọc ở amxIoPoll().
+void amxIoSendGet() {
+  if (!amxIoClient.connected()) return;
+  for (int i = 1; i <= 4; i++)
+    amxIoClient.print(String("get /io/") + i + "/digitalInput\n");
+}
+
+// Đọc response từ CE-IO4 — non-blocking, gọi mỗi vòng loop().
+void amxIoPoll() {
+  while (amxIoClient.available()) {
+    char c = amxIoClient.read();
+    if (c == '\n') {
+      amxIoRxBuf.trim();
+      if (amxIoRxBuf.length()) {
+        _parseAmxIoLine(amxIoRxBuf);
+        amxIoLastOk = millis();
+      }
+      amxIoRxBuf = "";
+    } else if (c != '\r') {
+      amxIoRxBuf += c;
+    }
+  }
+}
+
+bool amxReadInputs() {
+  amxIoSendGet();
+  return amxIoClient.connected();
+}
+
+bool amxReadRelays() {
+  String cmds[4];
+  for (int i = 0; i < 4; i++) cmds[i] = "Subscribe /relay/" + String(i+1) + "/state";
+  return amxMultiQuery(amxRelayIP, cmds, 4, _parseAmxRelayLine, 4);
+}
+
+void amxSetRelay(int ch, bool val) {
+  // ch = 1..4
+  String cmd = "set /relay/" + String(ch) + "/state " + (val ? "true" : "false");
+  String cmds[1] = {cmd};
+  amxMultiQuery(amxRelayIP, cmds, 1, _parseAmxRelayLine, 1);
+  bitWrite(amxRelaySnapshot, ch-1, val);  // optimistic update
+}
+
+// Kết nối persistent tới CE-IO4, cấu hình inputMode, seed snapshot ban đầu.
+bool amxIoConnect() {
+  amxIoClient.stop();
+  if (!amxIoClient.connect(amxIoIP, amxPort)) {
+    return false;
+  }
+  // Set inputMode DIGITAL cho 4 port (có thể fail nếu firmware không hỗ trợ — ok)
+  for (int i = 1; i <= 4; i++) {
+    amxIoClient.print(String("set /io/") + i + "/mode INPUT\n");
+    amxIoClient.print(String("set /io/") + i + "/inputMode DIGITAL\n");
+  }
+  delay(200);  // chờ CE-IO4 xử lý set commands
+  while (amxIoClient.available()) amxIoClient.read();  // flush responses
+
+  // Seed: đọc trạng thái hiện tại, KHÔNG trigger toggle
+  for (int i = 1; i <= 4; i++)
+    amxIoClient.print(String("get /io/") + i + "/digitalInput\n");
+  unsigned long t0 = millis(); amxIoRxBuf = "";
+  while (millis() - t0 < 300) {
+    while (amxIoClient.available()) {
+      char c = amxIoClient.read();
+      if (c == '\n') {
+        amxIoRxBuf.trim();
+        if (amxIoRxBuf.startsWith("update /io/")) {
+          int n = amxIoRxBuf.charAt(11) - '1';
+          if (n >= 0 && n < 4) bitWrite(amxInputSnapshot, n, amxIoRxBuf.endsWith("true"));
+        }
+        amxIoRxBuf = "";
+      } else if (c != '\r') amxIoRxBuf += c;
+    }
+  }
+  amxIoRxBuf = "";
+  amxNeedsReconcile = false;
+  amxPendingToggle  = 0;
+  amxIoLastOk = millis();
+  Serial.println("AMX IO connected & seeded");
+  return true;
+}
+
+// Toggle relay khi công tắc tường thay đổi — chạy sau AMX_RECONCILE_DELAY_MS.
+// Đọc relay thật trước: nếu relay đã thay đổi so với lúc IO đổi → Kramer đã xử lý → bỏ qua.
+// Nếu relay chưa thay đổi → Kramer chưa phản hồi → ESP32 toggle.
+void amxReconcile() {
+  amxReadRelays();  // cập nhật amxRelaySnapshot
+  for (int i = 0; i < 4; i++) {
+    if (!bitRead(amxPendingToggle, i)) continue;
+    bitWrite(amxPendingToggle, i, false);
+    bool before = bitRead(amxRelayBeforeIO, i);
+    bool now    = bitRead(amxRelaySnapshot, i);
+    if (now == before) {
+      // Relay chưa thay đổi → Kramer chưa toggle → ESP32 toggle
+      amxSetRelay(i + 1, !now);
+    }
+    // Nếu now != before → Kramer đã toggle rồi → không làm gì
+  }
+}
+
+
 /* ===== HTTP HANDLER ===== */
 void handleWebRequest(EthernetClient client) {
   String request = "";
@@ -151,6 +506,65 @@ void handleWebRequest(EthernetClient client) {
     yield();
   }
   if (!headerComplete) { client.stop(); return; }
+
+  // ===== LOGIN (POST /login) =====
+  if (request.startsWith("POST /login")) {
+    // Đọc body (password được gửi dạng form: p=xxx)
+    String body = "";
+    unsigned long tb = millis();
+    while (millis() - tb < 300) {
+      while (client.available()) { body += (char)client.read(); }
+      if (!client.connected()) break;
+      yield();
+    }
+    int pi = body.indexOf("p=");
+    String submitted = (pi >= 0) ? body.substring(pi + 2) : "";
+    // URL decode dấu + và %xx đơn giản
+    submitted.replace("+", " ");
+    if (submitted == authPass) {
+      // Đúng mật khẩu → set cookie, redirect về /
+      client.println("HTTP/1.1 302 Found\r\n"
+                     "Location: /\r\n"
+                     "Set-Cookie: sid=" + authToken + "; Path=/; HttpOnly\r\n"
+                     "Connection: close\r\n");
+      client.println();
+    } else {
+      serveLoginPage(client, true);
+    }
+    client.stop(); return;
+  }
+
+  // ===== COOKIE AUTH CHECK =====
+  if (!checkCookie(request)) { serveLoginPage(client, false); return; }
+
+  // ===== AC TOGGLE =====
+  if (request.indexOf("GET /ac/toggle?") >= 0) {
+    int chPos = request.indexOf("ch=") + 3;
+    int chEnd = request.indexOf(" ", chPos);
+    int ch = request.substring(chPos, chEnd).toInt();
+    bool sent = false;
+    if (ch >= 0 && ch <= 3) {
+      logoSendPulse(ch);
+      sent = true;
+    }
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"sent\":"); client.print(sent ? "true" : "false");
+    client.print(",\"ch\":"); client.print(ch); client.println("}");
+    client.stop(); return;
+  }
+
+  // ===== AC STATUS =====
+  if (request.indexOf("GET /ac/status") >= 0) {
+    readACFeedback();
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"ac\":[");
+    for (int i = 0; i < 4; i++) {
+      client.print((acSnapshot >> i) & 1);
+      if (i < 3) client.print(",");
+    }
+    client.println("]}");
+    client.stop(); return;
+  }
 
   // ===== API SET =====
   if (request.indexOf("GET /set?") >= 0) {
@@ -176,18 +590,305 @@ void handleWebRequest(EthernetClient client) {
     client.stop(); return;
   }
 
-  /* ===== WEB UI MENU ===== */
-  if (request.startsWith("GET / ")) {
+  /* ===== SPA — Single Page Application ===== */
+  if (request.startsWith("GET / ") || request.startsWith("GET /mega") ||
+      request.startsWith("GET /modbus") || request.startsWith("GET /amx ") ||
+      request.startsWith("GET /kios")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}h2{margin-top:10px}.menu{max-width:500px;margin:30px auto;display:grid;gap:14px;}a{display:block;padding:18px;border-radius:12px;background:#333;color:#fff;text-decoration:none;font-size:18px;border:1px solid #555;}a:hover{background:#444;}</style></head><body>");
-    client.println("<h2>TNN SI - SMART CONTROL</h2><p>Chọn nhóm thiết bị cần điều khiển:</p>");
-    client.println("<div class='menu'>");
-    client.println("<a href='/mega'>🔌 Điều khiển Đèn (MEGA)</a>");
-    client.println("<a href='/logo'>❄️ Điều khiển Điều hòa (LOGO!)</a>");
-    client.println("<a href='/amx'>🧩 Điều khiển thiết bị AMX</a>");
-    client.println("<a href='/modbus'>⚙️ Điều khiển Modbus TCP</a>");
-    client.println("</div></body></html>");
+    // ── HEAD ──
+    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>TNN Smart Control</title>");
+    client.println("<style>");
+    client.println("*{box-sizing:border-box;margin:0;padding:0}");
+    client.println("body{font-family:Arial,sans-serif;background:#111;color:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}");
+    // nav bar
+    client.println(".nav{display:flex;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0}");
+    client.println(".nav-btn{flex:1;padding:11px 4px;font-size:12px;text-align:center;background:none;border:none;color:#888;cursor:pointer;border-bottom:2px solid transparent;transition:.15s}");
+    client.println(".nav-btn.active{color:#fff;border-bottom-color:#4a9eff}");
+    client.println(".nav-btn:hover{color:#ccc}");
+    // pages
+    client.println(".page{display:none;flex:1;overflow-y:auto;flex-direction:column}");
+    client.println(".page.active{display:flex}");
+    // shared top bar
+    client.println(".top{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap}");
+    client.println(".top h2{margin:0;font-size:15px;flex:1}");
+    client.println(".info-btn{padding:5px 9px;border-radius:6px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:12px}");
+    client.println(".info-btn:hover{background:#333;color:#fff}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:12px 14px;font-size:11.5px;line-height:1.7;color:#bbb;flex-shrink:0}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 4px;font-size:12px}");
+    client.println(".info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 4px;border-radius:3px}");
+    client.println(".cfg{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin-top:6px}");
+    client.println(".cfg .k{color:#888}.cfg .v{color:#7dd3fc;font-family:monospace}");
+    // mega
+    client.println(".grid16{display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:8px;padding:10px}");
+    client.println(".grid16 button{height:56px;font-size:11px;border-radius:9px;border:none;background:#333;color:#fff;cursor:pointer;transition:.1s}");
+    client.println(".grid16 button:active,.grid16 button.pressing{transform:scale(.95);background:#666}");
+    client.println(".grid16 button.on{background:#1a6a1a}");
+    // ac
+    client.println(".grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;padding:20px 14px}");
+    client.println(".ac-btn{height:86px;border-radius:12px;border:2px solid #444;background:#222;color:#fff;font-size:13px;font-weight:bold;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;transition:.15s}");
+    client.println(".ac-btn .icon{font-size:24px}.ac-btn.on{background:#0a4a7a;border-color:#1a8fd1;color:#7dd3fc}");
+    client.println(".ac-btn.cooling{opacity:.5;pointer-events:none}.ac-btn:active{transform:scale(.96)}");
+    client.println(".dot{width:7px;height:7px;border-radius:50%;background:#555}.on .dot{background:#1a8fd1}");
+    // amx
+    client.println(".section{padding:10px 12px}.section-title{font-size:12px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}");
+    client.println(".relay-btn{width:100%;padding:14px;border-radius:10px;border:1px solid #444;background:#222;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;margin-bottom:8px;transition:.15s}");
+    client.println(".relay-btn.on{background:#1a4a1a;border-color:#2a7a2a}.relay-btn .icon{font-size:20px}");
+    client.println(".io-grid{display:flex;gap:12px;flex-wrap:wrap}.io-indicator{text-align:center;font-size:11px;color:#888}");
+    client.println(".io-dot{width:14px;height:14px;border-radius:50%;background:#333;margin:4px auto 0}");
+    client.println(".io-indicator.active .io-dot{background:#55aaff}");
+    // kios
+    client.println("#kios-page{padding:0;position:relative}");
+    client.println(".kios-bar{display:flex;gap:6px;padding:7px 10px;background:#111;border-bottom:1px solid #222;flex-shrink:0;flex-wrap:wrap}");
+    client.println(".site-btn{padding:6px 14px;border-radius:7px;border:1px solid #335;background:#1a1a2a;color:#aad4ff;font-size:12px;font-weight:bold;cursor:pointer}");
+    client.println(".site-btn.active{background:#225588;border-color:#4488cc;color:#fff}");
+    client.println(".site-btn.add{background:#1a2a1a;border-color:#3a5a3a;color:#88cc88}");
+    client.println(".url-bar{display:none;gap:6px;padding:6px 10px;background:#141414;border-bottom:1px solid #222;flex-shrink:0;align-items:center;flex-wrap:wrap}");
+    client.println("#url-input{flex:1;min-width:160px;padding:5px 9px;border-radius:6px;border:1px solid #444;background:#222;color:#fff;font-size:12px}");
+    client.println(".kbtn{padding:5px 10px;border-radius:6px;color:#fff;border:none;cursor:pointer;font-size:12px}");
+    client.println(".kios-frame{flex:1;width:100%;border:none;background:#fff}");
+    client.println("@keyframes spin{to{transform:rotate(360deg)}}");
+    // status bar
+    client.println(".sbar{font-size:10px;opacity:.4;padding:6px 12px;flex-shrink:0}");
+    // clock + logout
+    client.println(".nav-right{display:flex;align-items:center;gap:2px;padding:0 6px;flex-shrink:0}");
+    client.println("#clk{font-size:11px;color:#aaa;font-family:monospace;min-width:54px;text-align:center}");
+    client.println(".logout-btn{padding:5px 8px;border-radius:6px;background:none;border:1px solid #444;color:#888;cursor:pointer;font-size:11px}");
+    client.println(".logout-btn:hover{border-color:#888;color:#fff}");
+    // settings page
+    client.println(".settings-wrap{padding:16px;max-width:400px;margin:0 auto;width:100%}");
+    client.println(".setting-card{background:#1a1a1a;border:1px solid #333;border-radius:10px;padding:16px;margin-bottom:14px}");
+    client.println(".setting-card h3{font-size:13px;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}");
+    client.println(".setting-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}");
+    client.println(".setting-row label{font-size:14px;color:#ddd}");
+    client.println(".toggle{position:relative;width:44px;height:24px}");
+    client.println(".toggle input{opacity:0;width:0;height:0}");
+    client.println(".slider{position:absolute;inset:0;background:#444;border-radius:24px;cursor:pointer;transition:.2s}");
+    client.println(".slider:before{content:'';position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}");
+    client.println(".toggle input:checked+.slider{background:#1a6a1a}");
+    client.println(".toggle input:checked+.slider:before{transform:translateX(20px)}");
+    client.println(".time-input{display:flex;gap:8px;align-items:center}");
+    client.println(".time-input input{width:58px;padding:7px;border-radius:7px;border:1px solid #444;background:#222;color:#fff;font-size:15px;text-align:center}");
+    client.println(".save-btn{width:100%;padding:12px;border-radius:8px;border:none;background:#1a4a1a;color:#fff;font-size:14px;cursor:pointer;margin-top:4px}");
+    client.println(".save-btn:hover{background:#2a6a2a}");
+    client.println(".sched-status{font-size:12px;color:#888;margin-top:8px;text-align:center}");
+    client.println("</style></head><body>");
+
+    // ── NAV BAR ──
+    client.println("<div class='nav'>");
+    client.println("<button class='nav-btn' onclick='nav(0)'>🔌<br>Đèn</button>");
+    client.println("<button class='nav-btn' onclick='nav(1)'>❄️<br>Điều hòa</button>");
+    client.println("<button class='nav-btn' onclick='nav(2)'>🧩<br>AMX</button>");
+    client.println("<button class='nav-btn' onclick='nav(3)'>🖥️<br>KIOS</button>");
+    client.println("<button class='nav-btn' onclick='nav(4)'>⚙️<br>Cài đặt</button>");
+    client.println("<div class='nav-right'><span id='clk'>--:--:--</span>"
+                   "<button class='logout-btn' onclick=\"location='/logout'\">Thoát</button></div>");
+    client.println("</div>");
+
+    // ── PAGE 0: MEGA ──
+    client.println("<div class='page' id='p0'>");
+    client.println("<div class='top'><h2>🔌 MEGA CONTROL</h2><button class='info-btn' onclick='ti(0)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i0'>");
+    client.println("Browser → <code>ESP32 :80</code> → TCP :9000 → <code>MEGA 192.168.1.178</code> → RS485 → Board relay 16 kênh<br>Connect-per-transaction: mỗi lệnh mở TCP mới, gửi, đọc, đóng.");
+    client.println("<div class='cfg'><span class='k'>MEGA IP</span><span class='v'>192.168.1.178:9000</span>");
+    client.println("<span class='k'>Poll</span><span class='v'>2s</span><span class='k'>Timeout</span><span class='v'>300ms</span></div></div>");
+    client.println("<div class='grid16'>");
+    const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
+    for (int i = 1; i <= 16; i++) {
+      client.print("<button id='L"); client.print(i); client.print("'>");
+      client.print(i); client.print(". "); client.print(names[i-1]); client.println("</button>");
+    }
+    client.println("<button id='ALL' style='background:#6a1a1a;grid-column:1/-1'>🔴 TẮT TẤT CẢ</button></div>");
+    client.println("<div class='sbar' id='sb0'>Đang tải...</div></div>");
+
+    // ── PAGE 1: MODBUS / AC ──
+    client.println("<div class='page' id='p1'>");
+    client.println("<div class='top'><h2>❄️ ĐIỀU HÒA (LOGO! 8)</h2><button class='info-btn' onclick='ti(1)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i1'>");
+    client.println("Browser → <code>ESP32 :80</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4<br>");
+    client.println("Pulse pattern: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. Feedback: đọc V0.0-V0.3 (FC1).");
+    client.println("<div class='cfg'><span class='k'>LOGO! IP</span><span class='v'>192.168.1.6:504</span>");
+    client.println("<span class='k'>Pulse</span><span class='v'>500ms</span><span class='k'>Cooldown</span><span class='v'>1500ms/kênh</span></div></div>");
+    client.println("<div class='grid4'>");
+    const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='ac-btn' id='ac"); client.print(i); client.print("' onclick='acToggle("); client.print(i); client.println(")'>");
+      client.print("<span class='icon'>❄️</span><span>"); client.print(acNames[i]); client.println("</span><div class='dot'></div></button>");
+    }
+    client.println("</div><div class='sbar' id='sb1'>Đang tải...</div></div>");
+
+    // ── PAGE 2: AMX ──
+    client.println("<div class='page' id='p2'>");
+    client.println("<div class='top'><h2>🧩 AMX CONTROL</h2><button class='info-btn' onclick='ti(2)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i2'>");
+    client.println("Mỗi lần công tắc tường <b>thay đổi</b> → toggle relay. Chờ 300ms nhường Kramer → đọc relay thật → toggle nếu chưa đổi.");
+    client.println("<div class='cfg'><span class='k'>CE-IO4</span><span class='v'>192.168.1.7:44197 (poll 600ms)</span>");
+    client.println("<span class='k'>CE-REL8</span><span class='v'>192.168.1.204:44197</span></div></div>");
+    client.println("<div class='section'><div class='section-title'>CE-REL8 — Relay đèn (1-4)</div>");
+    const char* amxRelayNames[] = {"P.Họp","P.Tuấn","K.Doanh","H.Lang"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='relay-btn' id='R"); client.print(i+1); client.print("' onclick='amxToggle("); client.print(i+1); client.println(")'>");
+      client.print("<span class='icon'>💡</span><span>Relay "); client.print(i+1); client.print(" — "); client.print(amxRelayNames[i]); client.println("</span></button>");
+    }
+    client.println("</div><div class='section'><div class='section-title'>CE-IO4 — Công tắc tường (1-4)</div><div class='io-grid'>");
+    const char* amxIoNames[] = {"IO 1","IO 2","IO 3","IO 4"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<div class='io-indicator' id='IO"); client.print(i+1); client.print("'>"); client.print(amxIoNames[i]); client.println("<div class='io-dot'></div></div>");
+    }
+    client.println("</div></div><div class='sbar' id='sb2'>Đang tải...</div></div>");
+
+    // ── PAGE 3: KIOS ──
+    client.println("<div class='page' id='p3' id='kios-page'>");
+    client.println("<div class='kios-bar'>");
+    client.println("<div class='site-btn' id='kb0' onclick='kLoad(0)'>KC-Brain</div>");
+    client.println("<div class='site-btn' id='kb1' onclick='kLoad(1)'>SL-240C</div>");
+    client.println("<div class='site-btn add' onclick='kToggleInput()'>＋ Nhập URL</div>");
+    client.println("<div class='site-btn' style='margin-left:auto;background:#1a2a1a;border-color:#2a4a2a' onclick='kReload()'>🔄</div>");
+    client.println("</div>");
+    client.println("<div class='url-bar' id='kurl'>");
+    client.println("<input id='url-input' type='text' placeholder='http://...'>");
+    client.println("<button class='kbtn' style='background:#225588' onclick='kGo()'>▶ Mở</button>");
+    client.println("<button class='kbtn' style='background:#333' onclick='kNewTab()'>↗ Tab</button></div>");
+    client.println("<div id='kload' style='display:none;position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:10;align-items:center;justify-content:center;flex-direction:column;gap:10px'>"
+                   "<div style='width:36px;height:36px;border:3px solid #334155;border-top-color:#7dd3fc;border-radius:50%;animation:spin .8s linear infinite'></div>"
+                   "<span style='color:#94a3b8;font-size:13px'>Đang tải...</span></div>");
+    client.println("<iframe id='kf' class='kios-frame' src='' onload='kHideLoad()'></iframe></div>");
+
+    // ── PAGE 4: SETTINGS ──
+    client.println("<div class='page' id='p4'><div class='settings-wrap'>");
+    client.println("<div class='setting-card'>");
+    client.println("<h3>⏰ Tự động tắt thiết bị</h3>");
+    client.println("<div class='setting-row'><label>Bật lịch tắt tự động</label>"
+                   "<label class='toggle'><input type='checkbox' id='sched-en'>"
+                   "<span class='slider'></span></label></div>");
+    client.println("<div class='setting-row'><label>Giờ tắt</label>"
+                   "<div class='time-input'>"
+                   "<input type='number' id='sched-h' min='0' max='23' placeholder='HH'>"
+                   "<span style='color:#888'>:</span>"
+                   "<input type='number' id='sched-m' min='0' max='59' placeholder='MM'>"
+                   "</div></div>");
+    client.println("<button class='save-btn' onclick='saveSched()'>💾 Lưu cài đặt</button>");
+    client.println("<div class='sched-status' id='sched-status'></div>");
+    client.println("</div>");  // setting-card
+    // Password card — collapsed by default
+    client.println("<div class='setting-card'>");
+    client.println("<h3>🔑 Đổi mật khẩu</h3>");
+    client.println("<div id='pass-body' style='display:none;margin-top:12px'>");
+    client.println("<div class='setting-row'><label>Mật khẩu hiện tại</label>"
+                   "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
+    client.println("<div class='setting-row'><label>Mật khẩu mới</label>"
+                   "<input type='password' id='new-p' placeholder='4–32 ký tự' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
+    client.println("<div class='setting-row'><label>Nhập lại mật khẩu mới</label>"
+                   "<input type='password' id='new-p2' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
+    client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
+    client.println("<div class='sched-status' id='pass-status'></div>");
+    client.println("</div></div>");  // pass-body + password card
+    // Info card — nhấn tiêu đề 5 lần liên tiếp để mở phần đổi mật khẩu
+    client.println("<div class='setting-card'>");
+    client.println("<h3 onclick='infoTap()' style='cursor:default'>ℹ️ Thông tin hệ thống</h3>");
+    client.println("<div style='font-size:13px;color:#aaa;line-height:2'>");
+    client.print("<div>Firmware: <span style='color:#7dd3fc'>"); client.print(FW_VERSION); client.println("</span></div>");
+    client.println("<div>IP: <span style='color:#7dd3fc'>192.168.1.180</span></div>");
+    client.println("<div>NTP: <span id='ntp-status' style='color:#888'>...</span></div>");
+    client.println("<div>Uptime: <span id='uptime'>...</span></div>");
+    client.println("</div></div>");  // info card
+    client.println("</div></div>");  // settings-wrap + page
+
+    // ── JAVASCRIPT ──
+    client.println("<script>");
+    // navigation
+    client.println("var pages=5,cur=0;");
+    client.println("function nav(i){");
+    client.println("  document.querySelectorAll('.page').forEach(function(p,j){p.classList.toggle('active',j===i);});");
+    client.println("  document.querySelectorAll('.nav-btn').forEach(function(b,j){b.classList.toggle('active',j===i);});");
+    client.println("  cur=i;");
+    client.println("  if(i===3&&!document.getElementById('kf').src)kLoad(0);");
+    client.println("  if(i===4)loadSched();");
+    client.println("}");
+    // info panel toggle
+    client.println("function ti(n){var p=document.getElementById('i'+n);p.style.display=p.style.display==='block'?'none':'block';}");
+
+    // ── MEGA logic ──
+    client.println("var pendingM={},cmdFlight=false,lastCmd=0,qCmd=null;");
+    client.println("function applyMega(t){t.split(',').forEach(function(p){var kv=p.trim().split('=');if(kv.length!=2)return;var k=kv[0].trim(),v=kv[1].trim();var b=document.getElementById(k);if(!b)return;var on=(v==='1');b.classList.toggle('on',on);pendingM[k]=on;});document.getElementById('sb0').innerText='Cập nhật: '+new Date().toLocaleTimeString();}");
+    client.println("function sendM(c,b){var now=Date.now();if(now-lastCmd<150){qCmd={c,b};setTimeout(function(){if(!cmdFlight&&qCmd){var q=qCmd;qCmd=null;sendM(q.c,q.b);}},150);return;}lastCmd=now;cmdFlight=true;if(b){b.classList.add('pressing');setTimeout(function(){b.classList.remove('pressing');},90);}fetch('/cmd?c='+encodeURIComponent(c)).then(function(){setTimeout(pollMega,80);}).catch(function(){setTimeout(pollMega,150);}).finally(function(){cmdFlight=false;if(qCmd){var q=qCmd;qCmd=null;sendM(q.c,q.b);}});}");
+    client.println("for(var _i=1;_i<=16;_i++){(function(i){var b=document.getElementById('L'+i);if(b)b.onclick=function(){var k='L'+i,cur=(k in pendingM)?pendingM[k]:b.classList.contains('on'),next=!cur;pendingM[k]=next;b.classList.toggle('on',next);sendM('set /relay/'+i+'/state '+(next?'true':'false'),b);};}(_i));}");
+    client.println("document.getElementById('ALL').onclick=function(e){pendingM={};sendM('set /system/all off',e.target);};");
+    client.println("function pollMega(){fetch('/status').then(function(r){return r.text();}).then(applyMega).catch(function(){document.getElementById('sb0').innerText='Lỗi kết nối MEGA';});}");
+
+    // ── AC logic ──
+    client.println("var COOL=1600,lastAC=[-1e9,-1e9,-1e9,-1e9];");
+    client.println("function acToggle(ch){var now=Date.now();if(now-lastAC[ch]<COOL)return;lastAC[ch]=now;var b=document.getElementById('ac'+ch);b.classList.add('cooling');fetch('/ac/toggle?ch='+ch).then(function(){setTimeout(pollAC,700);}).catch(function(){setTimeout(pollAC,1000);});setTimeout(function(){b.classList.remove('cooling');},COOL);}");
+    client.println("function pollAC(){fetch('/ac/status').then(function(r){return r.json();}).then(function(d){d.ac.forEach(function(v,i){document.getElementById('ac'+i).classList.toggle('on',!!v);});document.getElementById('sb1').innerText='Cập nhật: '+new Date().toLocaleTimeString();}).catch(function(){document.getElementById('sb1').innerText='Lỗi kết nối LOGO!';});}");
+
+    // ── AMX logic ──
+    client.println("var pendingR={};");
+    client.println("function amxToggle(ch){var b=document.getElementById('R'+ch);var on=(ch in pendingR)?pendingR[ch]:b.classList.contains('on');var next=!on;pendingR[ch]=next;b.classList.toggle('on',next);fetch('/amx/relay?ch='+ch+'&value='+next).then(function(){setTimeout(pollAMX,300);}).catch(function(){setTimeout(pollAMX,500);});}");
+    client.println("function pollAMX(){fetch('/amx/status').then(function(r){return r.json();}).then(function(d){d.relay.forEach(function(v,i){var b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingR[i+1]=!!v;}});d.io.forEach(function(v,i){var el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});document.getElementById('sb2').innerText='Cập nhật: '+new Date().toLocaleTimeString();}).catch(function(){document.getElementById('sb2').innerText='Lỗi kết nối AMX';});}");
+
+    // ── KIOS logic ──
+    client.println("var kSites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
+    client.println("var kfr=document.getElementById('kf'),kinp=document.getElementById('url-input'),kub=document.getElementById('kurl');");
+    client.println("function kLoad(i){kfr.src=kSites[i];kub.style.display='none';[0,1].forEach(function(j){document.getElementById('kb'+j).classList.toggle('active',j===i);});document.getElementById('kload').style.display='flex';}");
+    client.println("function kHideLoad(){document.getElementById('kload').style.display='none';}");
+    client.println("function kToggleInput(){kub.style.display=kub.style.display==='flex'?'none':'flex';if(kub.style.display==='flex')kinp.focus();}");
+    client.println("function kGo(){var u=kinp.value.trim();if(!u)return;if(!u.startsWith('http'))u='http://'+u;kinp.value=u;kfr.src=u;}");
+    client.println("function kNewTab(){var u=kfr.src||kinp.value.trim();if(u)window.open(u,'_blank');}");
+    client.println("function kReload(){kfr.src=kfr.src;}");
+    client.println("kinp.addEventListener('keydown',function(e){if(e.key==='Enter')kGo();});");
+
+    // ── Clock (cập nhật mỗi giây từ /info) ──
+    client.println("function updateClock(){fetch('/info').then(function(r){return r.json();}).then(function(d){");
+    client.println("  document.getElementById('clk').innerText=d.time;");
+    client.println("  if(cur===4){");
+    client.println("    var ns=document.getElementById('ntp-status');");
+    client.println("    if(ns)ns.innerText=d.ntp?'✅ Đồng bộ':'❌ Chưa sync';");
+    client.println("    var up=document.getElementById('uptime');");
+    client.println("    if(up){var s=d.uptime,h=Math.floor(s/3600),m=Math.floor((s%3600)/60);up.innerText=h+'h '+m+'m';}");
+    client.println("  }");
+    client.println("}).catch(function(){});}");
+    client.println("setInterval(updateClock,1000);");
+
+    // ── Settings logic ──
+    client.println("function loadSched(){fetch('/settings').then(function(r){return r.json();}).then(function(d){");
+    client.println("  document.getElementById('sched-en').checked=d.enabled;");
+    client.println("  document.getElementById('sched-h').value=d.hour;");
+    client.println("  document.getElementById('sched-m').value=String(d.min).padStart(2,'0');");
+    client.println("  var s=document.getElementById('sched-status');");
+    client.println("  s.innerText=d.enabled?'Lịch BẬT — tắt lúc '+String(d.hour).padStart(2,'0')+':'+String(d.min).padStart(2,'0'):'Lịch TẮT';");
+    client.println("}).catch(function(){});}");
+    client.println("function saveSched(){");
+    client.println("  var en=document.getElementById('sched-en').checked?1:0;");
+    client.println("  var h=parseInt(document.getElementById('sched-h').value)||0;");
+    client.println("  var m=parseInt(document.getElementById('sched-m').value)||0;");
+    client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},");
+    client.println("    body:'enabled='+en+'&hour='+h+'&min='+m})");
+    client.println("  .then(function(){loadSched();document.getElementById('sched-status').innerText='✅ Đã lưu!';})");
+    client.println("  .catch(function(){document.getElementById('sched-status').innerText='❌ Lỗi lưu';});}");
+    client.println("function changePass(){");
+    client.println("  var o=document.getElementById('old-p').value;");
+    client.println("  var n=document.getElementById('new-p').value;");
+    client.println("  var n2=document.getElementById('new-p2').value;");
+    client.println("  var s=document.getElementById('pass-status');");
+    client.println("  if(!o||!n||!n2){s.innerText='⚠️ Nhập đủ 3 ô mật khẩu';return;}");
+    client.println("  if(n!==n2){s.innerText='⚠️ Mật khẩu mới không khớp';return;}");
+    client.println("  if(n.length<4||n.length>32){s.innerText='⚠️ Mật khẩu mới 4–32 ký tự';return;}");
+    client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},");
+    client.println("    body:'old_p='+encodeURIComponent(o)+'&new_p='+encodeURIComponent(n)})");
+    client.println("  .then(function(r){return r.json();}).then(function(d){");
+    client.println("    if(d.ok){s.innerText='✅ Đổi mật khẩu thành công!';document.getElementById('old-p').value='';document.getElementById('new-p').value='';document.getElementById('new-p2').value='';}");
+    client.println("    else if(d.err==='wrong_pass')s.innerText='❌ Mật khẩu hiện tại không đúng';");
+    client.println("    else s.innerText='❌ Lỗi: '+d.err;");
+    client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
+    client.println("var _itap=0,_itimer=0;");
+    client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=5){_itap=0;var b=document.getElementById('pass-body');b.style.display=b.style.display==='block'?'none':'block';}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
+
+    // ── polling master ──
+    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
+    // Cập nhật uptime/NTP tại tab Cài đặt qua updateClock() (mỗi 1s) — không reload form lịch tự động
+    client.println("setInterval(masterPoll,2000);");
+    // Khởi động
+    client.println("nav(0);pollMega();updateClock();");
+    client.println("</script></body></html>");
     client.stop(); return;
   }
 
@@ -196,16 +897,34 @@ void handleWebRequest(EthernetClient client) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
     client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;}");
-    client.println(".top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}");
-    client.println(".back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}");
-    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;}");
+    client.println(".top{display:flex;gap:8px;align-items:center;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #333;flex-wrap:wrap;}");
+    client.println(".back{padding:7px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;font-size:13px;}");
+    client.println(".back:hover{background:#444;} .top h2{margin:0;font-size:15px;flex:1;}");
+    client.println(".info-btn{padding:6px 10px;border-radius:7px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:13px;}");
+    client.println(".info-btn:hover{background:#333;color:#fff;}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:14px 16px;font-size:12px;line-height:1.7;color:#bbb;}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 6px;font-size:13px;} .info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 5px;border-radius:4px;}");
+    client.println(".info-panel .cfg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:8px;}");
+    client.println(".cfg .k{color:#888;} .cfg .v{color:#7dd3fc;font-family:monospace;}");
+    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;padding:10px;}");
     client.println("button{height:60px;font-size:12px;border-radius:10px;border:none;background:#444;color:#fff;transition:0.1s;cursor:pointer;}");
     client.println("button:active{transform:scale(0.95);background:#666;}");
     client.println("button.pressing{transform:scale(0.95);background:#888;}");
-    client.println(".on{background:green;color:#fff;}");
-    client.println("button.on{background:green;}");
+    client.println(".on{background:green;color:#fff;} button.on{background:green;}");
     client.println("</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>TNN SI - MEGA CONTROL</h2></div>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🔌 MEGA CONTROL</h2>");
+    client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
+    client.println("<div class='info-panel' id='infop'>");
+    client.println("<h4>Kiến trúc</h4>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → TCP :9000 → <code>MEGA 192.168.1.178</code> → RS485 9600 → <b>Board relay 16 kênh</b><br>");
+    client.println("ESP32 dùng <b>connect-per-transaction</b>: mỗi lệnh mở TCP mới, gửi, đọc response, đóng. Không giữ persistent connection.<br>");
+    client.println("Công tắc tường nối vào input vật lý của board relay, MEGA mirror thay đổi input → toggle relay tương ứng.");
+    client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
+    client.println("<span class='k'>MEGA IP</span><span class='v'>192.168.1.178:9000</span>");
+    client.println("<span class='k'>Poll status</span><span class='v'>mỗi 3s (ESP32 → MEGA get /relay/all)</span>");
+    client.println("<span class='k'>Timeout</span><span class='v'>300ms</span>");
+    client.println("</div></div>");
+    client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
     client.println("<h4>RELAY CONTROL (1-16)</h4><div class='grid'>");
     const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
     for (int i = 1; i <= 16; i++) {
@@ -228,17 +947,34 @@ void handleWebRequest(EthernetClient client) {
     client.stop(); return;
   }
 
-  /* ===== WEB UI LOGO! ===== */
-  if (request.startsWith("GET /logo ")) {
-    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
-    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>*{margin:0;padding:0;box-sizing:border-box;}body{display:flex;flex-direction:column;height:100vh;background:#111;font-family:Arial;}.bar{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap;}.back{padding:6px 10px;border-radius:7px;background:#333;color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;}.back:hover{background:#444;}.title{color:#fff;font-size:14px;font-weight:bold;flex:1;}.btn{padding:6px 10px;border-radius:7px;color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;cursor:pointer;border:none;}.btn-blue{background:#225588;}.btn-green{background:#226633;}.hint{background:#2a2000;border-bottom:1px solid #554400;padding:8px 12px;font-size:12px;color:#ffcc66;flex-shrink:0;}.hint b{color:#ffee99;}iframe{flex:1;width:100%;border:none;}</style></head><body>");
-    client.println("<div class='bar'><a class='back' href='/'>⬅ Menu</a><span class='title'>❄️ Điều hòa (LOGO!)</span>");
-    client.println("<a class='btn btn-blue' href='http://192.168.1.6/webroot/main.htm' target='_blank'>↗ Mở mới</a>");
-    client.println("<button class='btn btn-green' onclick='document.getElementById(\"lf\").src=document.getElementById(\"lf\").src'>🔄 Tải lại</button></div>");
-    client.println("<div class='hint'>⚠️ Nếu thấy trang đăng nhập: nhấn <b>↗ Mở mới</b> → đăng nhập → quay lại → nhấn <b>🔄 Tải lại</b></div>");
-    client.println("<iframe id='lf' src='http://192.168.1.6/webroot/main.htm'></iframe>");
-    client.println("</body></html>");
+  // ===== AMX RELAY SET =====
+  if (request.indexOf("GET /amx/relay?") >= 0) {
+    int chPos = request.indexOf("ch=") + 3;
+    int chEnd = request.indexOf("&", chPos); if (chEnd < 0) chEnd = request.indexOf(" ", chPos);
+    int vPos  = request.indexOf("value=") + 6;
+    int vEnd  = request.indexOf(" ", vPos);
+    int ch = request.substring(chPos, chEnd).toInt();
+    bool val = request.substring(vPos, vEnd) == "true";
+    if (ch >= 1 && ch <= 4) {
+      amxSetRelay(ch, val);
+    }
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"ch\":"); client.print(ch);
+    client.print(",\"value\":"); client.print(val?"true":"false"); client.println("}");
+    client.stop(); return;
+  }
+
+  // ===== AMX STATUS =====
+  if (request.indexOf("GET /amx/status") >= 0) {
+    amxReadRelays();
+    // amxInputSnapshot được cập nhật liên tục qua persistent connection + amxIoPoll()
+    // không cần gọi amxReadInputs() TCP ở đây
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.print("{\"relay\":[");
+    for (int i = 0; i < 4; i++) { client.print((amxRelaySnapshot>>i)&1); if(i<3) client.print(","); }
+    client.print("],\"io\":[");
+    for (int i = 0; i < 4; i++) { client.print((amxInputSnapshot>>i)&1); if(i<3) client.print(","); }
+    client.println("]}");
     client.stop(); return;
   }
 
@@ -246,23 +982,225 @@ void handleWebRequest(EthernetClient client) {
   if (request.startsWith("GET /amx ")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:16px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.grid{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:10px;max-width:500px;margin:20px auto;}button{height:70px;font-size:14px;border-radius:10px;border:none;background:#225588;color:#fff;}small{opacity:.75;display:block;margin-top:8px;}</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>AMX CONTROL</h2></div>");
-    client.println("<p>Trang giao diện AMX (khung cơ bản 4 nút, sẽ gắn lệnh sau).</p>");
-    client.println("<div class='grid'><button>AMX 1</button><button>AMX 2</button><button>AMX 3</button><button>AMX 4</button></div>");
-    client.println("<small>Hiện tại các nút đang ở chế độ placeholder.</small></body></html>");
+    client.println("<style>");
+    client.println("body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:0;}");
+    client.println(".top{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a1a;border-bottom:1px solid #333;flex-wrap:wrap;}");
+    client.println(".back{padding:7px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;font-size:14px;}");
+    client.println(".back:hover{background:#444;} h2{margin:0;font-size:16px;flex:1;}");
+    client.println(".section{max-width:600px;margin:20px auto;padding:0 14px;}");
+    client.println(".section-title{text-align:left;font-size:12px;color:#888;text-transform:uppercase;margin-bottom:8px;letter-spacing:1px;}");
+    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;}");
+    client.println(".relay-btn{height:80px;border-radius:12px;border:2px solid #444;background:#222;color:#fff;font-size:13px;font-weight:bold;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;transition:0.15s;}");
+    client.println(".relay-btn .icon{font-size:22px;} .relay-btn.on{background:#1a4a1a;border-color:#2d8a2d;color:#86efac;}");
+    client.println(".relay-btn.on .icon{color:#86efac;} .relay-btn:active{transform:scale(0.96);}");
+    client.println(".io-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:0;}");
+    client.println(".io-indicator{padding:10px 6px;border-radius:10px;border:1px solid #333;background:#1a1a1a;font-size:11px;color:#888;}");
+    client.println(".io-indicator.active{border-color:#55aaff;color:#55aaff;background:#0a1a2a;}");
+    client.println(".io-dot{width:10px;height:10px;border-radius:50%;background:#333;margin:4px auto 0;}");
+    client.println(".io-indicator.active .io-dot{background:#55aaff;}");
+    client.println("#status-bar{font-size:11px;opacity:0.4;margin:12px 0;}");
+    client.println(".info-btn{padding:6px 10px;border-radius:7px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:13px;}");
+    client.println(".info-btn:hover{background:#333;color:#fff;}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:14px 16px;font-size:12px;line-height:1.7;color:#bbb;}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 6px;font-size:13px;} .info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 5px;border-radius:4px;}");
+    client.println(".info-panel .cfg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:8px;} .cfg .k{color:#888;} .cfg .v{color:#7dd3fc;font-family:monospace;}");
+    client.println("</style></head><body>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>🧩 AMX CONTROL</h2>");
+    client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
+    client.println("<div class='info-panel' id='infop'>");
+    client.println("<h4>Kiến trúc</h4>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code><br>");
+    client.println("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ TCP :44197 → <code>CE-IO4 192.168.1.7</code> (4 công tắc tường, poll 800ms)<br>");
+    client.println("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ TCP :44197 → <code>CE-REL8 192.168.1.204</code> (4 relay đèn)<br>");
+    client.println("<h4 style='margin-top:8px'>Logic công tắc tường</h4>");
+    client.println("Mỗi lần công tắc <b>thay đổi trạng thái</b> (bật→tắt hoặc tắt→bật) → toggle relay tương ứng.<br>");
+    client.println("Chờ 500ms nhường Kramer phản hồi trước → đọc relay thật:<br>");
+    client.println("&nbsp;• Relay chưa thay đổi → Kramer chưa xử lý → ESP32 toggle<br>");
+    client.println("&nbsp;• Relay đã thay đổi &nbsp;→ Kramer đã xử lý &nbsp;→ ESP32 bỏ qua<br>");
+    client.println("Nút web gọi <code>set /relay/N/state</code> trực tiếp, không liên quan đến logic toggle.");
+    client.println("<h4 style='margin-top:8px'>Cấu hình</h4><div class='cfg'>");
+    client.println("<span class='k'>CE-IO4 IP</span><span class='v'>192.168.1.7:44197</span>");
+    client.println("<span class='k'>CE-REL8 IP</span><span class='v'>192.168.1.204:44197</span>");
+    client.println("<span class='k'>IO poll</span><span class='v'>mỗi 800ms</span>");
+    client.println("<span class='k'>Toggle delay</span><span class='v'>500ms (nhường Kramer)</span>");
+    client.println("</div></div>");
+    client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
+
+    // Relay section
+    client.println("<div class='section'><div class='section-title'>CE-REL8 — Điều khiển đèn (Relay 1-4)</div><div class='grid'>");
+    const char* amxRelayNames[] = {"P.Họp","P.Tuấn","K.Doanh","H.Lang"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='relay-btn' id='R"); client.print(i+1); client.print("' onclick='toggleRelay("); client.print(i+1); client.println(")'>");
+      client.println("<span class='icon'>💡</span>");
+      client.print("<span>Relay "); client.print(i+1); client.print(" — "); client.print(amxRelayNames[i]); client.println("</span></button>");
+    }
+    client.println("</div></div>");
+
+    // IO section
+    client.println("<div class='section'><div class='section-title'>CE-IO4 — Công tắc tường (IO Input 1-4)</div><div class='io-grid'>");
+    const char* amxIoNames[] = {"IO 1","IO 2","IO 3","IO 4"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<div class='io-indicator' id='IO"); client.print(i+1); client.println("'>");
+      client.print(amxIoNames[i]); client.println("<div class='io-dot'></div></div>");
+    }
+    client.println("</div></div>");
+    client.println("<div id='status-bar'>Đang tải...</div>");
+
+    client.println("<script>");
+    client.println("let pendingRelay={};");
+    client.println("function toggleRelay(ch){");
+    client.println("  let btn=document.getElementById('R'+ch);");
+    client.println("  let current=(ch in pendingRelay)?pendingRelay[ch]:btn.classList.contains('on');");
+    client.println("  let next=!current; pendingRelay[ch]=next;");
+    client.println("  btn.classList.toggle('on',next);");
+    client.println("  fetch('/amx/relay?ch='+ch+'&value='+next).then(()=>setTimeout(poll,300)).catch(()=>setTimeout(poll,500));");
+    client.println("}");
+    client.println("function poll(){");
+    client.println("  fetch('/amx/status').then(r=>r.json()).then(d=>{");
+    client.println("    d.relay.forEach((v,i)=>{let b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingRelay[i+1]=!!v;}});");
+    client.println("    d.io.forEach((v,i)=>{let el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});");
+    client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
+    client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối AMX';});");
+    client.println("}");
+    client.println("setInterval(poll,2000);poll();");
+    client.println("</script></body></html>");
     client.stop(); return;
   }
 
-  /* ===== WEB UI MODBUS TCP (placeholder) ===== */
+  /* ===== WEB UI MODBUS — AC CONTROL ===== */
   if (request.startsWith("GET /modbus ")) {
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
     client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
-    client.println("<style>body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:20px;}.top{display:flex;justify-content:center;gap:10px;align-items:center;flex-wrap:wrap;}.back{display:inline-block;padding:8px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;}.info{max-width:480px;margin:40px auto;background:#1a1a1a;border:1px solid #444;border-radius:12px;padding:24px;}.badge{display:inline-block;background:#553300;color:#ffaa55;border-radius:6px;padding:4px 10px;font-size:12px;margin-bottom:12px;}.desc{color:#aaa;font-size:14px;line-height:1.6;}</style></head><body>");
-    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>⚙️ MODBUS TCP CONTROL</h2></div>");
-    client.println("<div class='info'><span class='badge'>ĐANG PHÁT TRIỂN</span>");
-    client.println("<p class='desc'>Trang điều khiển thiết bị qua Modbus TCP trực tiếp.<br><br>Chưa hoạt động, sẽ hoàn thiện trong phiên bản tiếp theo.</p></div>");
-    client.println("</body></html>");
+    client.println("<style>");
+    client.println("body{font-family:Arial;background:#111;color:#fff;text-align:center;padding:0;}");
+    client.println(".top{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#1a1a1a;border-bottom:1px solid #333;flex-wrap:wrap;}");
+    client.println(".back{padding:7px 12px;border-radius:8px;background:#333;color:#fff;text-decoration:none;font-size:14px;}");
+    client.println(".back:hover{background:#444;}");
+    client.println("h2{margin:0;font-size:16px;flex:1;}");
+    client.println(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;max-width:600px;margin:30px auto;padding:0 16px;}");
+    client.println(".ac-btn{position:relative;height:90px;border-radius:14px;border:2px solid #444;background:#222;color:#fff;font-size:14px;font-weight:bold;cursor:pointer;transition:0.15s;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;}");
+    client.println(".ac-btn .icon{font-size:26px;}");
+    client.println(".ac-btn.on{background:#0a4a7a;border-color:#1a8fd1;color:#7dd3fc;}");
+    client.println(".ac-btn.on .icon{color:#7dd3fc;}");
+    client.println(".ac-btn.cooling{opacity:0.5;pointer-events:none;}");
+    client.println(".ac-btn:active{transform:scale(0.96);}");
+    client.println(".dot{width:8px;height:8px;border-radius:50%;background:#555;margin-top:2px;}");
+    client.println(".on .dot{background:#1a8fd1;}");
+    client.println("#status-bar{font-size:11px;opacity:0.45;margin-top:10px;}");
+    client.println("</style></head><body>");
+    client.println("<style>.info-btn{padding:6px 10px;border-radius:7px;background:#2a2a2a;color:#aaa;border:1px solid #444;cursor:pointer;font-size:13px;}.info-btn:hover{background:#333;color:#fff;}");
+    client.println(".info-panel{display:none;text-align:left;background:#181818;border-bottom:1px solid #333;padding:14px 16px;font-size:12px;line-height:1.7;color:#bbb;}");
+    client.println(".info-panel h4{color:#fff;margin:0 0 6px;font-size:13px;} .info-panel code{color:#88ccff;background:#1a2a3a;padding:1px 5px;border-radius:4px;}");
+    client.println(".info-panel .cfg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:8px;} .cfg .k{color:#888;} .cfg .v{color:#7dd3fc;font-family:monospace;}</style>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><h2>❄️ ĐIỀU HOÀ (LOGO! 8)</h2>");
+    client.println("<button class='info-btn' onclick='toggleInfo()'>ℹ️ Thông tin</button></div>");
+    client.println("<div class='info-panel' id='infop'>");
+    client.println("<h4>Kiến trúc</h4>");
+    client.println("Browser → HTTP :80 → <code>ESP32 192.168.1.180</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4 → Nút ĐH 1-4<br>");
+    client.println("Điều khiển bằng <b>pulse pattern</b>: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. LOGO! phát hiện cạnh lên → B001-B004 tạo xung 1s → relay nhả → giả lập nhấn nút ĐH.<br>");
+    client.println("Feedback thật: đọc Coil V0.0-V0.3 (FC1, addr 0-3) — LED bảng ĐH → I1-I4 → M21-M24 → NQ1-NQ4 → VM V0.0-V0.3.");
+    client.println("<h4 style='margin-top:10px'>Cấu hình hiện tại</h4><div class='cfg'>");
+    client.println("<span class='k'>LOGO! IP</span><span class='v'>192.168.1.6:504</span>");
+    client.println("<span class='k'>Điều khiển coil</span><span class='v'>V0.4-V0.7 (PDU addr 4-7, FC5)</span>");
+    client.println("<span class='k'>Feedback coil</span><span class='v'>V0.0-V0.3 (PDU addr 0-3, FC1)</span>");
+    client.println("<span class='k'>Pulse width</span><span class='v'>500ms ON → OFF</span>");
+    client.println("<span class='k'>Cooldown</span><span class='v'>1500ms / kênh</span>");
+    client.println("<span class='k'>Lưu ý</span><span class='v'>Kramer đang dùng 1/8 slot Modbus TCP của LOGO!</span>");
+    client.println("</div></div>");
+    client.println("<script>function toggleInfo(){var p=document.getElementById('infop');p.style.display=p.style.display==='block'?'none':'block';}</script>");
+    client.println("<div class='grid'>");
+    const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='ac-btn' id='ac"); client.print(i); client.print("' onclick='toggle("); client.print(i); client.println(")'>");
+      client.println("<span class='icon'>❄️</span>");
+      client.print("<span>"); client.print(acNames[i]); client.println("</span>");
+      client.println("<div class='dot'></div></button>");
+    }
+    client.println("</div><div id='status-bar'>Đang tải...</div>");
+    client.println("<script>");
+    client.println("const COOLDOWN=1600;let lastToggle=[-Infinity,-Infinity,-Infinity,-Infinity];");
+    client.println("function toggle(ch){");
+    client.println("  let now=Date.now();");
+    client.println("  if(now-lastToggle[ch]<COOLDOWN)return;");
+    client.println("  lastToggle[ch]=now;");
+    client.println("  let btn=document.getElementById('ac'+ch);");
+    client.println("  btn.classList.add('cooling');");
+    client.println("  fetch('/ac/toggle?ch='+ch).then(()=>setTimeout(poll,700)).catch(()=>setTimeout(poll,1000));");
+    client.println("  setTimeout(()=>btn.classList.remove('cooling'),COOLDOWN);");
+    client.println("}");
+    client.println("function poll(){");
+    client.println("  fetch('/ac/status').then(r=>r.json()).then(d=>{");
+    client.println("    d.ac.forEach((v,i)=>{");
+    client.println("      let b=document.getElementById('ac'+i);");
+    client.println("      if(v)b.classList.add('on');else b.classList.remove('on');");
+    client.println("    });");
+    client.println("    document.getElementById('status-bar').innerText='Cập nhật: '+new Date().toLocaleTimeString();");
+    client.println("  }).catch(()=>{document.getElementById('status-bar').innerText='Lỗi kết nối LOGO!';});");
+    client.println("}");
+    client.println("setInterval(poll,2000);poll();");
+    client.println("</script></body></html>");
+    client.stop(); return;
+  }
+
+  /* ===== WEB UI KIOS ===== */
+  if (request.startsWith("GET /kios ")) {
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\n");
+    client.println("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>");
+    client.println("<style>*{margin:0;padding:0;box-sizing:border-box;}body{display:flex;flex-direction:column;height:100vh;background:#111;font-family:Arial;}");
+    client.println(".top{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;flex-wrap:wrap;}");
+    client.println(".back{padding:6px 10px;border-radius:7px;background:#333;color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;}");
+    client.println(".back:hover{background:#444;} .title{color:#fff;font-size:14px;font-weight:bold;flex:1;}");
+    client.println(".site-bar{display:flex;gap:8px;padding:8px 10px;background:#111;border-bottom:1px solid #222;flex-shrink:0;flex-wrap:wrap;}");
+    client.println(".site-btn{padding:7px 18px;border-radius:8px;border:1px solid #335;background:#1a1a2a;color:#aad4ff;font-size:13px;font-weight:bold;cursor:pointer;}");
+    client.println(".site-btn:hover{background:#223;border-color:#558;color:#fff;}");
+    client.println(".site-btn.active{background:#225588;border-color:#4488cc;color:#fff;}");
+    client.println(".site-btn.add{background:#1a2a1a;border-color:#3a5a3a;color:#88cc88;}");
+    client.println(".site-btn.add:hover{background:#223322;color:#aaffaa;}");
+    client.println(".url-bar{display:none;align-items:center;gap:6px;padding:7px 10px;background:#141414;border-bottom:1px solid #2a2a2a;flex-shrink:0;flex-wrap:wrap;}");
+    client.println("#url-input{flex:1;min-width:200px;padding:6px 10px;border-radius:7px;border:1px solid #444;background:#222;color:#fff;font-size:13px;}");
+    client.println(".btn{padding:6px 12px;border-radius:7px;color:#fff;border:none;cursor:pointer;font-size:13px;white-space:nowrap;}");
+    client.println(".btn-go{background:#225588;} .btn-go:hover{background:#2a66aa;}");
+    client.println(".hint{background:#1a1a2a;border-bottom:1px solid #2a2a44;padding:6px 12px;font-size:11px;color:#7799cc;flex-shrink:0;display:none;}");
+    client.println("iframe{flex:1;width:100%;border:none;background:#fff;}</style></head><body>");
+    client.println("<div class='top'><a class='back' href='/'>⬅ Menu</a><span class='title'>🖥️ KIOS</span>");
+    client.println("<button class='btn' style='background:#1a3a1a;border:1px solid #2a5a2a;margin-left:auto;' onclick='reloadFrame()'>🔄 Tải lại</button>");
+    client.println("<button class='btn' style='background:#3a1a1a;border:1px solid #5a2a2a;' onclick='window.location.reload()'>↺ Khởi động lại</button></div>");
+    client.println("<div class='site-bar'>");
+    client.println("<div class='site-btn' id='btn0' onclick='loadSite(0)'>KC-Brain</div>");
+    client.println("<div class='site-btn' id='btn1' onclick='loadSite(1)'>SL-240C</div>");
+    client.println("<div class='site-btn add' id='btn2' onclick='toggleInput()'>＋ Nhập trang mới</div>");
+    client.println("</div>");
+    client.println("<div class='url-bar' id='url-bar'>");
+    client.println("<input id='url-input' type='text' placeholder='http://...' />");
+    client.println("<button class='btn btn-go' onclick='goCustom()'>▶ Mở</button>");
+    client.println("<button class='btn' style='background:#333;' onclick='openNew()'>↗ Tab mới</button></div>");
+    client.println("<div class='hint' id='hint'></div>");
+    client.println("<iframe id='kf' src=''></iframe>");
+    client.println("<script>");
+    client.println("var sites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
+    client.println("var fr=document.getElementById('kf'),ub=document.getElementById('url-bar'),hint=document.getElementById('hint');");
+    client.println("var inp=document.getElementById('url-input');");
+    client.println("var cur=-1;");
+    client.println("function loadSite(i){cur=i;fr.src=sites[i];ub.style.display='none';hint.style.display='block';");
+    client.println("  [0,1,2].forEach(function(j){document.getElementById('btn'+j).classList.toggle('active',j===i);});");
+    client.println("}");
+    client.println("function toggleInput(){ub.style.display=ub.style.display==='flex'?'none':'flex';");
+    client.println("  if(ub.style.display==='flex'){inp.focus();hint.style.display='block';}");
+    client.println("  [0,1].forEach(function(j){document.getElementById('btn'+j).classList.remove('active');});");
+    client.println("}");
+    client.println("function goCustom(){var u=inp.value.trim();if(!u)return;if(!u.startsWith('http'))u='http://'+u;");
+    client.println("  inp.value=u;fr.src=u;localStorage.setItem('kios_custom',u);}");
+    client.println("function openNew(){var u=fr.src||inp.value.trim();if(u)window.open(u,'_blank');}");
+    client.println("function reloadFrame(){if(fr.src)fr.src=fr.src;}");
+    client.println("inp.addEventListener('keydown',function(e){if(e.key==='Enter')goCustom();});");
+    // Auto-reconnect: ping ESP32 mỗi 10 giây, nếu mất rồi có lại thì tự reload trang
+    client.println("var _lost=false;");
+    client.println("setInterval(function(){");
+    client.println("  fetch('/').then(function(){if(_lost){_lost=false;window.location.reload();}})");
+    client.println("  .catch(function(){_lost=true;});");
+    client.println("},10000);");
+    client.println("loadSite(0);");
+    client.println("</script></body></html>");
     client.stop(); return;
   }
 
@@ -279,30 +1217,119 @@ void handleWebRequest(EthernetClient client) {
   }
 
   if (request.indexOf("GET /status") >= 0) {
-    // Trả cached globalStatus — được cập nhật bởi megaTransact() sau mỗi lệnh
     client.println("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + globalStatus);
     client.stop(); return;
   }
 
-  client.stop();
-}
+  // ===== /info =====
+  if (request.indexOf("GET /info") >= 0) {
+    unsigned long up = millis() / 1000;
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+      "{\"fw\":\"%s\",\"uptime\":%lu,\"time\":\"%s\","
+      "\"ntp\":%s,\"sched\":{\"enabled\":%s,\"hour\":%d,\"min\":%d}}",
+      FW_VERSION, up, nowTimeStr().c_str(),
+      ntpSynced ? "true" : "false",
+      schedEnabled ? "true" : "false",
+      schedEntry.hour, schedEntry.minute);
+    client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+    client.println(buf);
+    client.stop(); return;
+  }
 
-/* ===== ETHERNET REINIT (v2.0.1) ===== */
-// W5500 tích lũy socket state không sạch sau nhiều giờ chạy liên tục.
-// Triệu chứng: ping vẫn OK (ICMP xử lý bởi hardware W5500) nhưng web server
-// không phản hồi (TCP socket bị corrupt). Reinit định kỳ giải quyết dứt điểm.
-// Không cần reset vật lý ESP32 — chỉ cần reinit W5500 software state.
-void reinitEthernet() {
-  Serial.println("[REINIT] W5500 reinit...");
-  resetW5500();
-  delay(200);
-  Ethernet.init(W5500_CS);
-  Ethernet.begin(mac, ip, dns, gateway, subnet);
-  delay(1000);
-  server.begin();
-  Serial.print("[REINIT] Done. IP: "); Serial.println(Ethernet.localIP());
-  // Đọc lại trạng thái sau reinit
-  megaTransact("get /relay/all");
+  // ===== /settings (GET: đọc, POST: lưu) =====
+  if (request.indexOf("/settings") >= 0) {
+    if (request.startsWith("POST /settings")) {
+      // đọc body
+      String body = "";
+      unsigned long tb = millis();
+      while (millis() - tb < 300) {
+        while (client.available()) body += (char)client.read();
+        if (!client.connected()) break;
+        yield();
+      }
+      // parse enabled=1&hour=18&min=0
+      auto getParam = [&](const String& key) -> int {
+        int idx = body.indexOf(key + "=");
+        if (idx < 0) return -1;
+        int end = body.indexOf("&", idx);
+        return (end < 0 ? body.substring(idx + key.length() + 1)
+                        : body.substring(idx + key.length() + 1, end)).toInt();
+      };
+      // ── đổi mật khẩu (nếu có) ──
+      auto getStr = [&](const String& key) -> String {
+        int idx = body.indexOf(key + "=");
+        if (idx < 0) return "";
+        int end = body.indexOf("&", idx);
+        String v = (end < 0) ? body.substring(idx + key.length() + 1)
+                              : body.substring(idx + key.length() + 1, end);
+        v.replace("+", " ");
+        return v;
+      };
+      String oldp = getStr("old_p");
+      String newp = getStr("new_p");
+      if (newp.length() > 0) {
+        if (oldp != authPass) {
+          client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+          client.println("{\"ok\":false,\"err\":\"wrong_pass\"}");
+          client.stop(); return;
+        }
+        if (newp.length() < 4 || newp.length() > 32) {
+          client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+          client.println("{\"ok\":false,\"err\":\"bad_len\"}");
+          client.stop(); return;
+        }
+        authPass = newp;
+        Preferences prefs;
+        prefs.begin("tnn", false);
+        prefs.putString("auth_p", authPass);
+        prefs.end();
+        Serial.println("Password changed");
+        client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+        client.println("{\"ok\":true,\"changed\":true}");
+        client.stop(); return;
+      }
+
+      // ── lịch tắt ──
+      int en = getParam("enabled"); if (en >= 0) schedEnabled = (en == 1);
+      int hr = getParam("hour");    if (hr >= 0 && hr <= 23) schedEntry.hour = hr;
+      int mn = getParam("min");     if (mn >= 0 && mn <= 59) schedEntry.minute = mn;
+      schedFiredToday = 0;  // reset để áp dụng giờ mới ngay trong ngày
+      // Lưu vĩnh viễn vào flash NVS — tồn tại qua reboot
+      {
+        Preferences prefs;
+        prefs.begin("tnn", false);  // read-write
+        prefs.putBool("sched_en", schedEnabled);
+        prefs.putUChar("sched_h",  schedEntry.hour);
+        prefs.putUChar("sched_m",  schedEntry.minute);
+        prefs.end();
+      }
+      Serial.printf("Settings saved: sched=%s %02d:%02d\n",
+                    schedEnabled?"ON":"OFF", schedEntry.hour, schedEntry.minute);
+      client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+      client.println("{\"ok\":true}");
+    } else {
+      char buf[128];
+      snprintf(buf, sizeof(buf),
+        "{\"enabled\":%s,\"hour\":%d,\"min\":%d}",
+        schedEnabled ? "true" : "false", schedEntry.hour, schedEntry.minute);
+      client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+      client.println(buf);
+    }
+    client.stop(); return;
+  }
+
+  // ===== /logout =====
+  if (request.indexOf("GET /logout") >= 0) {
+    client.println("HTTP/1.1 302 Found\r\n"
+                   "Location: /login\r\n"
+                   "Set-Cookie: sid=; Path=/; Max-Age=0\r\n"
+                   "Connection: close\r\n");
+    client.println();
+    client.stop(); return;
+  }
+
+  client.stop();
 }
 
 /* ===== SETUP ===== */
@@ -320,16 +1347,38 @@ void setup() {
   Serial.print("IP: "); Serial.println(Ethernet.localIP());
   server.begin();
 
+  // Đọc settings đã lưu từ flash (tồn tại qua reboot)
+  {
+    Preferences prefs;
+    prefs.begin("tnn", true);  // read-only
+    schedEnabled      = prefs.getBool("sched_en", true);
+    schedEntry.hour   = prefs.getUChar("sched_h", 18);
+    schedEntry.minute = prefs.getUChar("sched_m", 0);
+    authPass          = prefs.getString("auth_p", AUTH_PASS_DEFAULT);
+    prefs.end();
+    Serial.printf("Settings loaded: sched=%s %02d:%02d\n",
+                  schedEnabled ? "ON" : "OFF", schedEntry.hour, schedEntry.minute);
+  }
+
+  initAuthToken();
+
   // Đọc trạng thái ban đầu từ MEGA
   megaTransact("get /relay/all");
+
+  // Khởi tạo CE-IO4 inputMode
+  amxIoConnect();
+
+  // NTP sync lần đầu (retry sẽ chạy trong loop() nếu thất bại)
+  lastNtpAttempt = millis();  // tránh loop() retry ngay lập tức sau setup()
+  if (ntpSync()) {
+    Serial.println("NTP OK");
+  } else {
+    Serial.println("NTP failed — will retry in 30s");
+  }
 }
 
 /* ===== LOOP ===== */
 void loop() {
-
-  // v2.0.1: Ethernet.maintain() — duy trì hardware state W5500 ổn định,
-  // quan trọng cho static IP để giữ ARP cache và socket table nhất quán
-  Ethernet.maintain();
 
   EthernetClient client = server.available();
   if (client) handleWebRequest(client);
@@ -340,24 +1389,43 @@ void loop() {
     logoPulse.active = false;
   }
 
-  // v2.0.1: Sync định kỳ — giảm từ 3s → 30s để giảm socket churn.
-  // 3s cũ = 28.800 TCP connections/ngày → W5500 socket state exhaustion sau vài giờ.
-  // 30s mới = 2.880 connections/ngày. globalStatus vẫn cập nhật ngay sau mỗi lệnh
-  // relay (qua megaTransact trong /cmd), nên UI vẫn nhạy. Sync 30s chỉ để bắt
-  // thay đổi từ công tắc vật lý khi không có ai bấm nút qua web.
+  // Sync trạng thái relay định kỳ (phòng trường hợp thay đổi từ công tắc vật lý / scene)
   static unsigned long lastSync = 0;
-  if (millis() - lastSync >= 30000) {
+  if (millis() - lastSync >= 3000) {
     lastSync = millis();
     megaTransact("get /relay/all");
   }
 
-  // v2.0.1: Tự động reinit W5500 sau 12 giờ uptime liên tục.
-  // Triệu chứng không có reinit: ping OK nhưng web không phản hồi sau 1 đêm,
-  // phải reset vật lý ESP32. Reinit software giải quyết mà không cần can thiệp.
-  // 12h * 3600s * 1000ms = 43.200.000ms
-  static unsigned long lastReinit = 0;
-  if (millis() - lastReinit >= 43200000UL) {
-    lastReinit = millis();
-    reinitEthernet();
+  // AMX CE-IO4 — persistent connection: đọc response non-blocking mỗi vòng loop,
+  // gửi get commands mỗi AMX_IO_POLL_INTERVAL_MS. Reconnect nếu mất kết nối.
+  if (amxIoClient.connected()) {
+    amxIoPoll();  // non-blocking read
+    static unsigned long lastIoPoll = 0;
+    if (millis() - lastIoPoll >= AMX_IO_POLL_INTERVAL_MS) {
+      lastIoPoll = millis();
+      amxIoSendGet();
+    }
+  } else if (millis() - amxIoLastOk >= AMX_IO_RECONNECT_MS) {
+    amxIoLastOk = millis();
+    amxIoConnect();
+  }
+
+  // Reconcile IO→relay sau delay (nhường Kramer phản hồi trước)
+  if (amxNeedsReconcile && millis() >= amxReconcileAfter) {
+    amxNeedsReconcile = false;
+    amxReconcile();
+  }
+
+  // NTP re-sync và scheduler
+  static unsigned long lastSchedCheck = 0;
+  if (millis() - lastSchedCheck >= 1000) {
+    lastSchedCheck = millis();
+    // Re-sync NTP định kỳ hoặc retry nếu chưa sync
+    unsigned long resyncInterval = ntpSynced ? NTP_RESYNC_MS : NTP_RETRY_MS;
+    if (millis() - lastNtpAttempt >= resyncInterval) {
+      lastNtpAttempt = millis();
+      ntpSync();
+    }
+    runScheduler();
   }
 }
