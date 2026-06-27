@@ -41,6 +41,17 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.0.7] - 2026-06-27
+Fix lỗi nghiêm trọng: sáng đến web ESP32 chết, ping vẫn OK, phải reset mới vào lại.
+
+- **Nguyên nhân**: W5500 chỉ có 8 socket phần cứng. Khi client (browser/kiosk) đóng kết nối TRƯỚC, socket phía W5500 rơi vào trạng thái `CLOSE_WAIT`. `server.available()` chỉ trả về socket có data đến → socket `CLOSE_WAIT` (remote đã đóng, không còn data) không bao giờ được trả về → `client.stop()` không bao giờ được gọi lên chúng → kẹt vĩnh viễn. Qua đêm tích lũy đến khi cạn cả 8 socket: web server không accept được kết nối mới (web chết) nhưng ping vẫn OK vì ICMP do phần cứng W5500 xử lý, không cần socket.
+- **Fix**: thêm `reapDeadSockets()` — quét cả 8 socket mỗi 2 giây, đóng những socket kẹt ở `CLOSE_WAIT` (status register `0x1C`) không còn data, giải phóng để tái sử dụng.
+- `Connection: close` (đã có từ trước) chỉ xử lý đúng khi SERVER đóng trước; trường hợp CLIENT đóng trước cần reap chủ động.
+- Không reset cả ESP32, không reset W5500 — chỉ đóng đúng socket bị rò.
+
+### [3.0.6] - 2026-06-26
+Thêm spinner "Đang tải..." overlay khi nhấn KC-Brain / SL-240C ở tab KIOS — phản hồi trực quan ngay, ẩn khi iframe load xong (`onload`).
+
 ### [3.0.5] - 2026-06-25
 Form đổi mật khẩu ẩn sau easter egg 5-tap trên tiêu đề "Thông tin hệ thống".
 

@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.6"
+#define FW_VERSION "3.0.7"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -266,6 +266,23 @@ void resetW5500() {
   digitalWrite(W5500_RST, HIGH); delay(100);
   digitalWrite(W5500_RST, LOW);  delay(200);
   digitalWrite(W5500_RST, HIGH); delay(200);
+}
+
+/* ===== SOCKET REAPER (v3.0.7) =====
+ * W5500 chỉ có 8 socket. Khi client (browser/kiosk) đóng kết nối TRƯỚC,
+ * socket phía W5500 rơi vào CLOSE_WAIT. server.available() chỉ trả về socket
+ * CÓ data → socket CLOSE_WAIT (remote đã đóng, không còn data) không bao giờ
+ * được trả về → không ai gọi stop() → kẹt vĩnh viễn, tích lũy đến khi cạn cả 8:
+ * web chết nhưng ping vẫn OK (ICMP do phần cứng W5500 xử lý, không cần socket).
+ * Quét định kỳ, đóng socket CLOSE_WAIT không còn data để giải phóng.
+ * 0x1C = SnSR::CLOSE_WAIT (hằng số phần cứng W5500). */
+void reapDeadSockets() {
+  for (uint8_t i = 0; i < MAX_SOCK_NUM; i++) {
+    EthernetClient c(i);
+    if (c.status() == 0x1C && c.available() == 0) {
+      c.stop();
+    }
+  }
 }
 
 /* ===== MEGA TRANSACT (v2.0.0 — connect-per-transaction) ===== */
@@ -1382,6 +1399,13 @@ void loop() {
 
   EthernetClient client = server.available();
   if (client) handleWebRequest(client);
+
+  // Thu hồi socket CLOSE_WAIT bị kẹt — chống cạn 8 socket W5500 (web chết, ping OK)
+  static unsigned long lastReap = 0;
+  if (millis() - lastReap >= 2000) {
+    lastReap = millis();
+    reapDeadSockets();
+  }
 
   // LOGO! pulse completion — non-blocking
   if (logoPulse.active && millis() - logoPulse.startMs >= LOGO_PULSE_MS) {
