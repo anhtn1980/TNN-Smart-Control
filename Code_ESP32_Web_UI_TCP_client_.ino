@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.7"
+#define FW_VERSION "3.0.8"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -137,6 +137,9 @@ static const char NTP_SERVER[] = "216.239.35.0";  // time.google.com (IP cố đ
 struct ScheduleEntry { uint8_t hour; uint8_t minute; };
 ScheduleEntry schedEntry = {18, 0};  // mặc định 18:00
 bool schedEnabled = true;            // bật/tắt scheduler qua UI
+
+// Hiển thị tab nav (bit0=Đèn, bit1=Điều hòa, bit2=AMX, bit3=KIOS). Cài đặt luôn hiện.
+uint8_t tabVisible = 0x0F;           // mặc định hiện tất cả
 #define SCHEDULE_WINDOW_S 300   // chạy nếu boot lên trong vòng 5 phút sau mốc
 
 EthernetUDP ntpUdp;
@@ -692,11 +695,16 @@ void handleWebRequest(EthernetClient client) {
 
     // ── NAV BAR ──
     client.println("<div class='nav'>");
-    client.println("<button class='nav-btn' onclick='nav(0)'>🔌<br>Đèn</button>");
-    client.println("<button class='nav-btn' onclick='nav(1)'>❄️<br>Điều hòa</button>");
-    client.println("<button class='nav-btn' onclick='nav(2)'>🧩<br>AMX</button>");
-    client.println("<button class='nav-btn' onclick='nav(3)'>🖥️<br>KIOS</button>");
-    client.println("<button class='nav-btn' onclick='nav(4)'>⚙️<br>Cài đặt</button>");
+    const char* navIcons[4] = {"🔌","❄️","🧩","🖥️"};
+    const char* navNames[4] = {"Đèn","Điều hòa","AMX","KIOS"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='nav-btn' id='nb"); client.print(i);
+      client.print("' onclick='nav("); client.print(i); client.print(")'");
+      if (!((tabVisible >> i) & 1)) client.print(" style='display:none'");
+      client.print(">"); client.print(navIcons[i]); client.print("<br>");
+      client.print(navNames[i]); client.println("</button>");
+    }
+    client.println("<button class='nav-btn' id='nb4' onclick='nav(4)'>⚙️<br>Cài đặt</button>");
     client.println("<div class='nav-right'><span id='clk'>--:--:--</span>"
                    "<button class='logout-btn' onclick=\"location='/logout'\">Thoát</button></div>");
     client.println("</div>");
@@ -772,8 +780,22 @@ void handleWebRequest(EthernetClient client) {
 
     // ── PAGE 4: SETTINGS ──
     client.println("<div class='page' id='p4'><div class='settings-wrap'>");
+    // Info card — luôn hiện. Nhấn tiêu đề 5 lần liên tiếp để mở phần cài đặt ẩn.
     client.println("<div class='setting-card'>");
-    client.println("<h3>⏰ Tự động tắt thiết bị</h3>");
+    client.println("<h3 onclick='infoTap()' style='cursor:default'>ℹ️ Thông tin hệ thống</h3>");
+    client.println("<div style='font-size:13px;color:#aaa;line-height:2'>");
+    client.print("<div>Firmware: <span style='color:#7dd3fc'>"); client.print(FW_VERSION); client.println("</span></div>");
+    client.println("<div>IP: <span style='color:#7dd3fc'>192.168.1.180</span></div>");
+    client.println("<div>NTP: <span id='ntp-status' style='color:#888'>...</span></div>");
+    client.println("<div>Uptime: <span id='uptime'>...</span></div>");
+    client.println("</div></div>");  // info card
+
+    // ── KHỐI CÀI ĐẶT ẨN (easter egg: nhấn "Thông tin hệ thống" 5 lần) ──
+    client.println("<div id='secret-body' style='display:none'>");
+
+    // Card: Hẹn giờ tắt thiết bị
+    client.println("<div class='setting-card'>");
+    client.println("<h3>⏰ Hẹn giờ tắt thiết bị</h3>");
     client.println("<div class='setting-row'><label>Bật lịch tắt tự động</label>"
                    "<label class='toggle'><input type='checkbox' id='sched-en'>"
                    "<span class='slider'></span></label></div>");
@@ -786,10 +808,23 @@ void handleWebRequest(EthernetClient client) {
     client.println("<button class='save-btn' onclick='saveSched()'>💾 Lưu cài đặt</button>");
     client.println("<div class='sched-status' id='sched-status'></div>");
     client.println("</div>");  // setting-card
-    // Password card — collapsed by default
+
+    // Card: Hiển thị tab
+    client.println("<div class='setting-card'>");
+    client.println("<h3>👁️ Hiển thị tab</h3>");
+    const char* tvNames[4] = {"🔌 Đèn","❄️ Điều hòa","🧩 AMX","🖥️ KIOS"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<div class='setting-row'><label>"); client.print(tvNames[i]);
+      client.print("</label><label class='toggle'><input type='checkbox' id='tv"); client.print(i);
+      client.println("'><span class='slider'></span></label></div>");
+    }
+    client.println("<button class='save-btn' onclick='saveTabs()'>💾 Lưu hiển thị</button>");
+    client.println("<div class='sched-status' id='tabs-status'></div>");
+    client.println("</div>");  // setting-card
+
+    // Card: Đổi mật khẩu
     client.println("<div class='setting-card'>");
     client.println("<h3>🔑 Đổi mật khẩu</h3>");
-    client.println("<div id='pass-body' style='display:none;margin-top:12px'>");
     client.println("<div class='setting-row'><label>Mật khẩu hiện tại</label>"
                    "<input type='password' id='old-p' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<div class='setting-row'><label>Mật khẩu mới</label>"
@@ -798,16 +833,9 @@ void handleWebRequest(EthernetClient client) {
                    "<input type='password' id='new-p2' placeholder='••••••' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:14px'></div>");
     client.println("<button class='save-btn' onclick='changePass()'>🔒 Đổi mật khẩu</button>");
     client.println("<div class='sched-status' id='pass-status'></div>");
-    client.println("</div></div>");  // pass-body + password card
-    // Info card — nhấn tiêu đề 5 lần liên tiếp để mở phần đổi mật khẩu
-    client.println("<div class='setting-card'>");
-    client.println("<h3 onclick='infoTap()' style='cursor:default'>ℹ️ Thông tin hệ thống</h3>");
-    client.println("<div style='font-size:13px;color:#aaa;line-height:2'>");
-    client.print("<div>Firmware: <span style='color:#7dd3fc'>"); client.print(FW_VERSION); client.println("</span></div>");
-    client.println("<div>IP: <span style='color:#7dd3fc'>192.168.1.180</span></div>");
-    client.println("<div>NTP: <span id='ntp-status' style='color:#888'>...</span></div>");
-    client.println("<div>Uptime: <span id='uptime'>...</span></div>");
-    client.println("</div></div>");  // info card
+    client.println("</div>");  // setting-card
+
+    client.println("</div>");  // secret-body
     client.println("</div></div>");  // settings-wrap + page
 
     // ── JAVASCRIPT ──
@@ -872,6 +900,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("  document.getElementById('sched-m').value=String(d.min).padStart(2,'0');");
     client.println("  var s=document.getElementById('sched-status');");
     client.println("  s.innerText=d.enabled?'Lịch BẬT — tắt lúc '+String(d.hour).padStart(2,'0')+':'+String(d.min).padStart(2,'0'):'Lịch TẮT';");
+    client.println("  if(typeof d.tabs==='number'){for(var i=0;i<4;i++){var t=document.getElementById('tv'+i);if(t)t.checked=!!((d.tabs>>i)&1);}}");
     client.println("}).catch(function(){});}");
     client.println("function saveSched(){");
     client.println("  var en=document.getElementById('sched-en').checked?1:0;");
@@ -881,6 +910,12 @@ void handleWebRequest(EthernetClient client) {
     client.println("    body:'enabled='+en+'&hour='+h+'&min='+m})");
     client.println("  .then(function(){loadSched();document.getElementById('sched-status').innerText='✅ Đã lưu!';})");
     client.println("  .catch(function(){document.getElementById('sched-status').innerText='❌ Lỗi lưu';});}");
+    client.println("function saveTabs(){");
+    client.println("  var t=0;for(var i=0;i<4;i++){if(document.getElementById('tv'+i).checked)t|=(1<<i);}");
+    client.println("  fetch('/settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'tabs='+t})");
+    client.println("  .then(function(){for(var i=0;i<4;i++){var b=document.getElementById('nb'+i);if(b)b.style.display=document.getElementById('tv'+i).checked?'':'none';}");
+    client.println("    document.getElementById('tabs-status').innerText='✅ Đã lưu!';})");
+    client.println("  .catch(function(){document.getElementById('tabs-status').innerText='❌ Lỗi lưu';});}");
     client.println("function changePass(){");
     client.println("  var o=document.getElementById('old-p').value;");
     client.println("  var n=document.getElementById('new-p').value;");
@@ -897,14 +932,16 @@ void handleWebRequest(EthernetClient client) {
     client.println("    else s.innerText='❌ Lỗi: '+d.err;");
     client.println("  }).catch(function(){s.innerText='❌ Lỗi kết nối';});}");
     client.println("var _itap=0,_itimer=0;");
-    client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=5){_itap=0;var b=document.getElementById('pass-body');b.style.display=b.style.display==='block'?'none':'block';}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
+    client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=5){_itap=0;var b=document.getElementById('secret-body');b.style.display=b.style.display==='block'?'none':'block';}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
 
     // ── polling master ──
     client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
     // Cập nhật uptime/NTP tại tab Cài đặt qua updateClock() (mỗi 1s) — không reload form lịch tự động
     client.println("setInterval(masterPoll,2000);");
-    // Khởi động
-    client.println("nav(0);pollMega();updateClock();");
+    // Khởi động — vào tab hiển thị đầu tiên (nếu Đèn bị ẩn thì chọn tab kế)
+    int firstTab = 4;
+    for (int i = 0; i < 4; i++) { if ((tabVisible >> i) & 1) { firstTab = i; break; } }
+    client.print("nav("); client.print(firstTab); client.println(");masterPoll();updateClock();");
     client.println("</script></body></html>");
     client.stop(); return;
   }
@@ -1307,6 +1344,20 @@ void handleWebRequest(EthernetClient client) {
         client.stop(); return;
       }
 
+      // ── hiển thị tab (nếu có) ──
+      int tabs = getParam("tabs");
+      if (tabs >= 0) {
+        tabVisible = (uint8_t)(tabs & 0x0F);
+        Preferences prefs;
+        prefs.begin("tnn", false);
+        prefs.putUChar("tab_vis", tabVisible);
+        prefs.end();
+        Serial.printf("Tab visibility saved: 0x%02X\n", tabVisible);
+        client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+        client.println("{\"ok\":true}");
+        client.stop(); return;
+      }
+
       // ── lịch tắt ──
       int en = getParam("enabled"); if (en >= 0) schedEnabled = (en == 1);
       int hr = getParam("hour");    if (hr >= 0 && hr <= 23) schedEntry.hour = hr;
@@ -1328,8 +1379,8 @@ void handleWebRequest(EthernetClient client) {
     } else {
       char buf[128];
       snprintf(buf, sizeof(buf),
-        "{\"enabled\":%s,\"hour\":%d,\"min\":%d}",
-        schedEnabled ? "true" : "false", schedEntry.hour, schedEntry.minute);
+        "{\"enabled\":%s,\"hour\":%d,\"min\":%d,\"tabs\":%d}",
+        schedEnabled ? "true" : "false", schedEntry.hour, schedEntry.minute, tabVisible);
       client.println("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
       client.println(buf);
     }
@@ -1372,6 +1423,7 @@ void setup() {
     schedEntry.hour   = prefs.getUChar("sched_h", 18);
     schedEntry.minute = prefs.getUChar("sched_m", 0);
     authPass          = prefs.getString("auth_p", AUTH_PASS_DEFAULT);
+    tabVisible        = prefs.getUChar("tab_vis", 0x0F);
     prefs.end();
     Serial.printf("Settings loaded: sched=%s %02d:%02d\n",
                   schedEnabled ? "ON" : "OFF", schedEntry.hour, schedEntry.minute);

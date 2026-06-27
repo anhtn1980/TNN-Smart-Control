@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v3.0.7 — 2026-06-27
+> Lần cập nhật gần nhất: v3.0.8 — 2026-06-27
 
 ---
 
@@ -43,7 +43,7 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 | Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.0.7 / 192.168.1.180 |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.0.8 / 192.168.1.180 |
 | MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
 | LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
 | AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |
@@ -394,6 +394,8 @@ HuongDanSuDung.doc                                      Hướng dẫn sử dụ
 - Đổi mật khẩu qua Settings tab, lưu NVS (key `auth_p`), xác nhận mật khẩu cũ — v3.0.2
 - Fix: lịch/giờ không lưu được do `loadSched()` ghi đè form mỗi 2s — v3.0.2
 - Form đổi mật khẩu ẩn sau easter egg: nhấn tiêu đề "Thông tin hệ thống" 5 lần — v3.0.5
+- Reap socket CLOSE_WAIT chống cạn 8 socket W5500 (web chết, ping OK) — v3.0.7
+- Khối cài đặt ẩn (Hẹn giờ tắt + Hiển thị tab + Đổi mật khẩu) sau easter egg; ẩn/hiện tab nav lưu NVS — v3.0.8
 - Nút Đăng xuất trên nav bar — v3.0.0
 
 ### Còn hạn chế / chưa xác nhận 🔲

@@ -41,6 +41,15 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.0.8] - 2026-06-27
+Đổi tên + ẩn cài đặt lịch, thêm tùy chọn ẩn/hiện tab.
+
+- Đổi tiêu đề card "⏰ Tự động tắt thiết bị" → "⏰ Hẹn giờ tắt thiết bị".
+- Gộp toàn bộ cài đặt nhạy cảm vào 1 khối ẩn `secret-body` — chỉ hiện khi nhấn tiêu đề "Thông tin hệ thống" 5 lần liên tiếp (easter egg, trước đây chỉ ẩn mục đổi mật khẩu): **Hẹn giờ tắt thiết bị**, **Hiển thị tab**, **Đổi mật khẩu**. Mặc định tab Cài đặt chỉ hiện card "Thông tin hệ thống".
+- **Mới: Hiển thị tab** — 4 toggle bật/tắt hiển thị tab Đèn / Điều hòa / AMX / KIOS (tab Cài đặt luôn hiện để còn lối vào). Lưu vào NVS key `tab_vis` (bitmask, mặc định `0x0F` = hiện tất cả), tồn tại qua reboot.
+- Nav bar render theo `tabVisible`: tab bị tắt → `display:none`. Lúc khởi động tự vào tab hiển thị đầu tiên (nếu Đèn bị ẩn).
+- `GET /settings` thêm trường `tabs`; `POST /settings` thêm nhánh xử lý `tabs=<bitmask>`.
+
 ### [3.0.7] - 2026-06-27
 Fix lỗi nghiêm trọng: sáng đến web ESP32 chết, ping vẫn OK, phải reset mới vào lại.
 
