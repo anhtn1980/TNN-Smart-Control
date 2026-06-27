@@ -41,6 +41,13 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.1.0] - 2026-06-27
+Fix "Lỗi kết nối" nhấp nháy trên điện thoại + giảm tải request lên W5500.
+
+- **Nguyên nhân**: đồng hồ gọi `/info` mỗi 1s, cộng poll trang mỗi 2s → tại mốc 2s hai request bắn gần đồng thời, cần 2 socket W5500 cùng lúc (lại chồng `megaTransact` định kỳ 3s). Trên điện thoại (WiFi RTT cao, trình duyệt mobile giữ/mở socket khác desktop) thỉnh thoảng 1 request không giành được socket → `fetch` reject → `.catch()` hiện "Lỗi kết nối" ngay (zero dung sai). Desktop mạng nhanh hiếm khi va chạm nên không thấy.
+- **Fix 1 — giảm tải**: đồng hồ tự chạy bằng JS (`tickClock` mỗi 1s), chỉ đồng bộ `/info` mỗi 30s (`syncInfo`) + khi vào tab Cài đặt. Bỏ ~28/30 request `/info`, xóa va chạm 1s/2s.
+- **Fix 2 — dung sai lỗi**: chỉ hiện "Lỗi kết nối" sau 2 lần trượt liên tiếp (`_fM`/`_fA`/`_fC`), thành công reset ngay → ẩn các blip vô hại.
+
 ### [3.0.9] - 2026-06-27
 Tinh chỉnh easter egg: ấn 3 lần (thay vì 5), giữ tiêu đề mục khi ẩn.
 

@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.0.9"
+#define FW_VERSION "3.1.0"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -851,28 +851,30 @@ void handleWebRequest(EthernetClient client) {
     client.println("  document.querySelectorAll('.nav-btn').forEach(function(b,j){b.classList.toggle('active',j===i);});");
     client.println("  cur=i;");
     client.println("  if(i===3&&!document.getElementById('kf').src)kLoad(0);");
-    client.println("  if(i===4)loadSched();");
+    client.println("  if(i===4){loadSched();syncInfo();}");
     client.println("}");
     // info panel toggle
     client.println("function ti(n){var p=document.getElementById('i'+n);p.style.display=p.style.display==='block'?'none':'block';}");
 
     // ── MEGA logic ──
     client.println("var pendingM={},cmdFlight=false,lastCmd=0,qCmd=null;");
+    // Bộ đếm trượt liên tiếp — chỉ báo "Lỗi kết nối" sau 2 lần trượt, tránh nháy lỗi
+    client.println("var _fM=0,_fA=0,_fC=0;");
     client.println("function applyMega(t){t.split(',').forEach(function(p){var kv=p.trim().split('=');if(kv.length!=2)return;var k=kv[0].trim(),v=kv[1].trim();var b=document.getElementById(k);if(!b)return;var on=(v==='1');b.classList.toggle('on',on);pendingM[k]=on;});document.getElementById('sb0').innerText='Cập nhật: '+new Date().toLocaleTimeString();}");
     client.println("function sendM(c,b){var now=Date.now();if(now-lastCmd<150){qCmd={c,b};setTimeout(function(){if(!cmdFlight&&qCmd){var q=qCmd;qCmd=null;sendM(q.c,q.b);}},150);return;}lastCmd=now;cmdFlight=true;if(b){b.classList.add('pressing');setTimeout(function(){b.classList.remove('pressing');},90);}fetch('/cmd?c='+encodeURIComponent(c)).then(function(){setTimeout(pollMega,80);}).catch(function(){setTimeout(pollMega,150);}).finally(function(){cmdFlight=false;if(qCmd){var q=qCmd;qCmd=null;sendM(q.c,q.b);}});}");
     client.println("for(var _i=1;_i<=16;_i++){(function(i){var b=document.getElementById('L'+i);if(b)b.onclick=function(){var k='L'+i,cur=(k in pendingM)?pendingM[k]:b.classList.contains('on'),next=!cur;pendingM[k]=next;b.classList.toggle('on',next);sendM('set /relay/'+i+'/state '+(next?'true':'false'),b);};}(_i));}");
     client.println("document.getElementById('ALL').onclick=function(e){pendingM={};sendM('set /system/all off',e.target);};");
-    client.println("function pollMega(){fetch('/status').then(function(r){return r.text();}).then(applyMega).catch(function(){document.getElementById('sb0').innerText='Lỗi kết nối MEGA';});}");
+    client.println("function pollMega(){fetch('/status').then(function(r){return r.text();}).then(function(t){applyMega(t);_fM=0;}).catch(function(){if(++_fM>=2)document.getElementById('sb0').innerText='Lỗi kết nối MEGA';});}");
 
     // ── AC logic ──
     client.println("var COOL=1600,lastAC=[-1e9,-1e9,-1e9,-1e9];");
     client.println("function acToggle(ch){var now=Date.now();if(now-lastAC[ch]<COOL)return;lastAC[ch]=now;var b=document.getElementById('ac'+ch);b.classList.add('cooling');fetch('/ac/toggle?ch='+ch).then(function(){setTimeout(pollAC,700);}).catch(function(){setTimeout(pollAC,1000);});setTimeout(function(){b.classList.remove('cooling');},COOL);}");
-    client.println("function pollAC(){fetch('/ac/status').then(function(r){return r.json();}).then(function(d){d.ac.forEach(function(v,i){document.getElementById('ac'+i).classList.toggle('on',!!v);});document.getElementById('sb1').innerText='Cập nhật: '+new Date().toLocaleTimeString();}).catch(function(){document.getElementById('sb1').innerText='Lỗi kết nối LOGO!';});}");
+    client.println("function pollAC(){fetch('/ac/status').then(function(r){return r.json();}).then(function(d){d.ac.forEach(function(v,i){document.getElementById('ac'+i).classList.toggle('on',!!v);});document.getElementById('sb1').innerText='Cập nhật: '+new Date().toLocaleTimeString();_fA=0;}).catch(function(){if(++_fA>=2)document.getElementById('sb1').innerText='Lỗi kết nối LOGO!';});}");
 
     // ── AMX logic ──
     client.println("var pendingR={};");
     client.println("function amxToggle(ch){var b=document.getElementById('R'+ch);var on=(ch in pendingR)?pendingR[ch]:b.classList.contains('on');var next=!on;pendingR[ch]=next;b.classList.toggle('on',next);fetch('/amx/relay?ch='+ch+'&value='+next).then(function(){setTimeout(pollAMX,300);}).catch(function(){setTimeout(pollAMX,500);});}");
-    client.println("function pollAMX(){fetch('/amx/status').then(function(r){return r.json();}).then(function(d){d.relay.forEach(function(v,i){var b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingR[i+1]=!!v;}});d.io.forEach(function(v,i){var el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});document.getElementById('sb2').innerText='Cập nhật: '+new Date().toLocaleTimeString();}).catch(function(){document.getElementById('sb2').innerText='Lỗi kết nối AMX';});}");
+    client.println("function pollAMX(){fetch('/amx/status').then(function(r){return r.json();}).then(function(d){d.relay.forEach(function(v,i){var b=document.getElementById('R'+(i+1));if(b){b.classList.toggle('on',!!v);pendingR[i+1]=!!v;}});d.io.forEach(function(v,i){var el=document.getElementById('IO'+(i+1));if(el)el.classList.toggle('active',!!v);});document.getElementById('sb2').innerText='Cập nhật: '+new Date().toLocaleTimeString();_fC=0;}).catch(function(){if(++_fC>=2)document.getElementById('sb2').innerText='Lỗi kết nối AMX';});}");
 
     // ── KIOS logic ──
     client.println("var kSites=['http://192.168.1.236:8000/','http://192.168.1.215:8000/'];");
@@ -885,8 +887,13 @@ void handleWebRequest(EthernetClient client) {
     client.println("function kReload(){kfr.src=kfr.src;}");
     client.println("kinp.addEventListener('keydown',function(e){if(e.key==='Enter')kGo();});");
 
-    // ── Clock (cập nhật mỗi giây từ /info) ──
-    client.println("function updateClock(){fetch('/info').then(function(r){return r.json();}).then(function(d){");
+    // ── Clock: đồng hồ tự chạy bằng JS (tick 1s), chỉ đồng bộ /info mỗi 30s ──
+    //    Giảm tải request lên W5500 → tránh va chạm socket gây "Lỗi kết nối" trên mobile.
+    client.println("var _h=0,_m=0,_s=0,_have=false;");
+    client.println("function tickClock(){if(!_have)return;_s++;if(_s>=60){_s=0;_m++;}if(_m>=60){_m=0;_h++;}if(_h>=24)_h=0;");
+    client.println("  document.getElementById('clk').innerText=String(_h).padStart(2,'0')+':'+String(_m).padStart(2,'0')+':'+String(_s).padStart(2,'0');}");
+    client.println("function syncInfo(){fetch('/info').then(function(r){return r.json();}).then(function(d){");
+    client.println("  var p=(''+d.time).split(':');if(p.length===3){_h=+p[0];_m=+p[1];_s=+p[2];_have=true;}");
     client.println("  document.getElementById('clk').innerText=d.time;");
     client.println("  if(cur===4){");
     client.println("    var ns=document.getElementById('ntp-status');");
@@ -895,7 +902,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("    if(up){var s=d.uptime,h=Math.floor(s/3600),m=Math.floor((s%3600)/60);up.innerText=h+'h '+m+'m';}");
     client.println("  }");
     client.println("}).catch(function(){});}");
-    client.println("setInterval(updateClock,1000);");
+    client.println("setInterval(tickClock,1000);");
+    client.println("setInterval(syncInfo,30000);");
 
     // ── Settings logic ──
     client.println("function loadSched(){fetch('/settings').then(function(r){return r.json();}).then(function(d){");
@@ -940,12 +948,12 @@ void handleWebRequest(EthernetClient client) {
 
     // ── polling master ──
     client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();}");
-    // Cập nhật uptime/NTP tại tab Cài đặt qua updateClock() (mỗi 1s) — không reload form lịch tự động
+    // Cập nhật uptime/NTP tại tab Cài đặt qua syncInfo() (mỗi 30s) — không reload form lịch tự động
     client.println("setInterval(masterPoll,2000);");
     // Khởi động — vào tab hiển thị đầu tiên (nếu Đèn bị ẩn thì chọn tab kế)
     int firstTab = 4;
     for (int i = 0; i < 4; i++) { if ((tabVisible >> i) & 1) { firstTab = i; break; } }
-    client.print("nav("); client.print(firstTab); client.println(");masterPoll();updateClock();");
+    client.print("nav("); client.print(firstTab); client.println(");masterPoll();syncInfo();");
     client.println("</script></body></html>");
     client.stop(); return;
   }
