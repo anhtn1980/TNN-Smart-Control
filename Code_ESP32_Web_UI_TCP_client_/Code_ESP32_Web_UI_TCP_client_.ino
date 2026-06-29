@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.2.1"
+#define FW_VERSION "3.2.2"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -715,7 +715,18 @@ void handleWebRequest(EthernetClient client) {
     // ── PAGE 0: ĐÈN MEGA & AMX (ghép) ──
     // Giao diện giống "Đèn MEGA"; nút C3/C10/C7/C2 hoạt động theo logic AMX (CE-REL8).
     client.println("<div class='page' id='pc'>");
-    client.println("<div class='top'><h2>💡 ĐÈN MEGA & AMX</h2></div>");
+    client.println("<div class='top'><h2>💡 ĐÈN MEGA & AMX</h2><button class='info-btn' onclick='ti(\"c\")'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='ic'>");
+    client.println("Giao diện ghép 16 relay MEGA + 4 relay AMX trên cùng 1 lưới.<br>");
+    client.println("12 nút thường → <code>/cmd</code> → TCP :9000 → <code>MEGA 192.168.1.178</code> → RS485<br>");
+    client.println("4 nút đặc biệt → <code>/amx/relay</code> → TCP :44197 → <code>CE-REL8 192.168.1.204</code>");
+    client.println("<div class='cfg'>");
+    client.println("<span class='k'>AMX Relay 1</span><span class='v'>nút 3 — P.Họp</span>");
+    client.println("<span class='k'>AMX Relay 2</span><span class='v'>nút 10 — P.Tuấn (Bàn Trà)</span>");
+    client.println("<span class='k'>AMX Relay 3</span><span class='v'>nút 7 — K.Doanh</span>");
+    client.println("<span class='k'>AMX Relay 4</span><span class='v'>nút 2 — H.Lang</span>");
+    client.println("<span class='k'>Poll</span><span class='v'>/status → /amx/status (tuần tự, 2s)</span>");
+    client.println("</div></div>");
     client.println("<div class='grid16'>");
     // Dùng lại mảng tên MEGA; 4 vị trí 3,10,7,2 sẽ mang logic AMX (đánh dấu data-amx)
     for (int i = 1; i <= 16; i++) {
