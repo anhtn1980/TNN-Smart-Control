@@ -4,7 +4,7 @@
 #include <Preferences.h>
 
 /* ===== FIRMWARE VERSION ===== */
-#define FW_VERSION "3.2.0"
+#define FW_VERSION "3.2.1"
 
 /* ===== W5500 PIN CONFIG ===== */
 #define W5500_CS 5
@@ -696,8 +696,8 @@ void handleWebRequest(EthernetClient client) {
 
     // ── NAV BAR ──
     client.println("<div class='nav'>");
-    const char* navIcons[5] = {"🔌","❄️","🧩","🖥️","💡"};
-    const char* navNames[5] = {"Đèn MEGA","Điều hòa LOGO!","Đèn AMX","KIOS","Đèn M&A"};
+    const char* navIcons[5] = {"💡","🔌","🧩","❄️","🖥️"};
+    const char* navNames[5] = {"Đèn M&A","Đèn MEGA","Đèn AMX","Điều hòa LOGO!","KIOS"};
     for (int i = 0; i < 5; i++) {
       client.print("<button class='nav-btn' id='nb"); client.print(i);
       client.print("' onclick='nav("); client.print(i); client.print(")'");
@@ -710,7 +710,25 @@ void handleWebRequest(EthernetClient client) {
                    "<button class='logout-btn' onclick=\"location='/logout'\">Thoát</button></div>");
     client.println("</div>");
 
-    // ── PAGE 0: MEGA ──
+    const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
+
+    // ── PAGE 0: ĐÈN MEGA & AMX (ghép) ──
+    // Giao diện giống "Đèn MEGA"; nút C3/C10/C7/C2 hoạt động theo logic AMX (CE-REL8).
+    client.println("<div class='page' id='pc'>");
+    client.println("<div class='top'><h2>💡 ĐÈN MEGA & AMX</h2></div>");
+    client.println("<div class='grid16'>");
+    // Dùng lại mảng tên MEGA; 4 vị trí 3,10,7,2 sẽ mang logic AMX (đánh dấu data-amx)
+    for (int i = 1; i <= 16; i++) {
+      int amxCh = (i==3)?1:(i==10)?2:(i==7)?3:(i==2)?4:0;  // 0 = nút MEGA thường
+      client.print("<button id='C"); client.print(i); client.print("'");
+      if (amxCh) { client.print(" data-amx='"); client.print(amxCh); client.print("'"); }
+      client.print(">"); client.print(i); client.print(". "); client.print(names[i-1]);
+      client.println("</button>");
+    }
+    client.println("<button id='CALL' style='background:#6a1a1a;grid-column:1/-1'>🔴 TẮT TẤT CẢ</button></div>");
+    client.println("<div class='sbar' id='sbc'>Đang tải...</div></div>");
+
+    // ── PAGE 1: MEGA ──
     client.println("<div class='page' id='p0'>");
     client.println("<div class='top'><h2>🔌 ĐÈN MEGA</h2><button class='info-btn' onclick='ti(0)'>ℹ️</button></div>");
     client.println("<div class='info-panel' id='i0'>");
@@ -718,29 +736,12 @@ void handleWebRequest(EthernetClient client) {
     client.println("<div class='cfg'><span class='k'>MEGA IP</span><span class='v'>192.168.1.178:9000</span>");
     client.println("<span class='k'>Poll</span><span class='v'>2s</span><span class='k'>Timeout</span><span class='v'>300ms</span></div></div>");
     client.println("<div class='grid16'>");
-    const char* names[] = {"Kho","H.Lang","P.Họp","Test Đèn","Lab","Còi","K.Doanh","N.Anh","P.Nguyên","P.Tuấn","Bàn Trà","Kế Toán","L13","L14","L15","L16"};
     for (int i = 1; i <= 16; i++) {
       client.print("<button id='L"); client.print(i); client.print("'>");
       client.print(i); client.print(". "); client.print(names[i-1]); client.println("</button>");
     }
     client.println("<button id='ALL' style='background:#6a1a1a;grid-column:1/-1'>🔴 TẮT TẤT CẢ</button></div>");
     client.println("<div class='sbar' id='sb0'>Đang tải...</div></div>");
-
-    // ── PAGE 1: MODBUS / AC ──
-    client.println("<div class='page' id='p1'>");
-    client.println("<div class='top'><h2>❄️ ĐIỀU HÒA LOGO!</h2><button class='info-btn' onclick='ti(1)'>ℹ️</button></div>");
-    client.println("<div class='info-panel' id='i1'>");
-    client.println("Browser → <code>ESP32 :80</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4<br>");
-    client.println("Pulse pattern: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. Feedback: đọc V0.0-V0.3 (FC1).");
-    client.println("<div class='cfg'><span class='k'>LOGO! IP</span><span class='v'>192.168.1.6:504</span>");
-    client.println("<span class='k'>Pulse</span><span class='v'>500ms</span><span class='k'>Cooldown</span><span class='v'>1500ms/kênh</span></div></div>");
-    client.println("<div class='grid4'>");
-    const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
-    for (int i = 0; i < 4; i++) {
-      client.print("<button class='ac-btn' id='ac"); client.print(i); client.print("' onclick='acToggle("); client.print(i); client.println(")'>");
-      client.print("<span class='icon'>❄️</span><span>"); client.print(acNames[i]); client.println("</span><div class='dot'></div></button>");
-    }
-    client.println("</div><div class='sbar' id='sb1'>Đang tải...</div></div>");
 
     // ── PAGE 2: AMX ──
     client.println("<div class='page' id='p2'>");
@@ -762,7 +763,23 @@ void handleWebRequest(EthernetClient client) {
     }
     client.println("</div></div><div class='sbar' id='sb2'>Đang tải...</div></div>");
 
-    // ── PAGE 3: KIOS ──
+    // ── PAGE 3: MODBUS / AC ──
+    client.println("<div class='page' id='p1'>");
+    client.println("<div class='top'><h2>❄️ ĐIỀU HÒA LOGO!</h2><button class='info-btn' onclick='ti(1)'>ℹ️</button></div>");
+    client.println("<div class='info-panel' id='i1'>");
+    client.println("Browser → <code>ESP32 :80</code> → Modbus TCP :504 → <code>LOGO! 8 192.168.1.6</code> → Relay Q1-Q4<br>");
+    client.println("Pulse pattern: ghi Coil V0.4-V0.7 = ON → đợi 500ms → OFF. Feedback: đọc V0.0-V0.3 (FC1).");
+    client.println("<div class='cfg'><span class='k'>LOGO! IP</span><span class='v'>192.168.1.6:504</span>");
+    client.println("<span class='k'>Pulse</span><span class='v'>500ms</span><span class='k'>Cooldown</span><span class='v'>1500ms/kênh</span></div></div>");
+    client.println("<div class='grid4'>");
+    const char* acNames[] = {"ĐH1 Kế Toán","ĐH2 P.Nguyên","ĐH3 P.Họp","ĐH4 P.Tuấn"};
+    for (int i = 0; i < 4; i++) {
+      client.print("<button class='ac-btn' id='ac"); client.print(i); client.print("' onclick='acToggle("); client.print(i); client.println(")'>");
+      client.print("<span class='icon'>❄️</span><span>"); client.print(acNames[i]); client.println("</span><div class='dot'></div></button>");
+    }
+    client.println("</div><div class='sbar' id='sb1'>Đang tải...</div></div>");
+
+    // ── PAGE 4: KIOS ──
     client.println("<div class='page' id='p3' id='kios-page'>");
     client.println("<div class='kios-bar'>");
     client.println("<div class='site-btn' id='kb0' onclick='kLoad(0)'>KC-Brain</div>");
@@ -778,22 +795,6 @@ void handleWebRequest(EthernetClient client) {
                    "<div style='width:36px;height:36px;border:3px solid #334155;border-top-color:#7dd3fc;border-radius:50%;animation:spin .8s linear infinite'></div>"
                    "<span style='color:#94a3b8;font-size:13px'>Đang tải...</span></div>");
     client.println("<iframe id='kf' class='kios-frame' src='' onload='kHideLoad()'></iframe></div>");
-
-    // ── PAGE 4: ĐÈN MEGA & AMX (ghép) ──
-    // Giao diện giống "Đèn MEGA"; nút C3/C10/C7/C2 hoạt động theo logic AMX (CE-REL8).
-    client.println("<div class='page' id='pc'>");
-    client.println("<div class='top'><h2>💡 ĐÈN MEGA & AMX</h2></div>");
-    client.println("<div class='grid16'>");
-    // Dùng lại mảng tên MEGA; 4 vị trí 3,10,7,2 sẽ mang logic AMX (đánh dấu data-amx)
-    for (int i = 1; i <= 16; i++) {
-      int amxCh = (i==3)?1:(i==10)?2:(i==7)?3:(i==2)?4:0;  // 0 = nút MEGA thường
-      client.print("<button id='C"); client.print(i); client.print("'");
-      if (amxCh) { client.print(" data-amx='"); client.print(amxCh); client.print("'"); }
-      client.print(">"); client.print(i); client.print(". "); client.print(names[i-1]);
-      client.println("</button>");
-    }
-    client.println("<button id='CALL' style='background:#6a1a1a;grid-column:1/-1'>🔴 TẮT TẤT CẢ</button></div>");
-    client.println("<div class='sbar' id='sbc'>Đang tải...</div></div>");
 
     // ── PAGE 5: SETTINGS ──
     client.println("<div class='page' id='p4'><div class='settings-wrap'>");
@@ -832,7 +833,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("<div class='setting-card'>");
     client.println("<h3>👁️ Hiển thị tab</h3>");
     client.println("<div class='sdet' style='display:none'>");
-    const char* tvNames[5] = {"🔌 Đèn MEGA","❄️ Điều hòa LOGO!","🧩 Đèn AMX","🖥️ KIOS","💡 Đèn M&A"};
+    const char* tvNames[5] = {"💡 Đèn M&A","🔌 Đèn MEGA","🧩 Đèn AMX","❄️ Điều hòa LOGO!","🖥️ KIOS"};
     for (int i = 0; i < 5; i++) {
       client.print("<div class='setting-row'><label>"); client.print(tvNames[i]);
       client.print("</label><label class='toggle'><input type='checkbox' id='tv"); client.print(i);
@@ -867,8 +868,8 @@ void handleWebRequest(EthernetClient client) {
     client.println("  document.querySelectorAll('.page').forEach(function(p,j){p.classList.toggle('active',j===i);});");
     client.println("  document.querySelectorAll('.nav-btn').forEach(function(b,j){b.classList.toggle('active',j===i);});");
     client.println("  cur=i;");
-    client.println("  if(i===3&&!document.getElementById('kf').src)kLoad(0);");
-    client.println("  if(i===4)pollCombo();");
+    client.println("  if(i===4&&!document.getElementById('kf').src)kLoad(0);");
+    client.println("  if(i===0)pollCombo();");
     client.println("  if(i===5){loadSched();syncInfo();}");
     client.println("}");
     // info panel toggle
@@ -981,7 +982,7 @@ void handleWebRequest(EthernetClient client) {
     client.println("function infoTap(){clearTimeout(_itimer);_itap++;if(_itap>=3){_itap=0;_secretOn=!_secretOn;document.querySelectorAll('.sdet').forEach(function(e){e.style.display=_secretOn?'block':'none';});}else{_itimer=setTimeout(function(){_itap=0;},1500);}}");
 
     // ── polling master ──
-    client.println("function masterPoll(){if(cur===0)pollMega();else if(cur===1)pollAC();else if(cur===2)pollAMX();else if(cur===4)pollCombo();}");
+    client.println("function masterPoll(){if(cur===1)pollMega();else if(cur===3)pollAC();else if(cur===2)pollAMX();else if(cur===0)pollCombo();}");
     // Cập nhật uptime/NTP tại tab Cài đặt qua syncInfo() (mỗi 30s) — không reload form lịch tự động
     client.println("setInterval(masterPoll,2000);");
     // Khởi động — vào tab hiển thị đầu tiên (nếu Đèn bị ẩn thì chọn tab kế)

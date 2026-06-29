@@ -80,7 +80,7 @@ Namespace `"tnn"`, các key hiện tại:
 | `sched_h` | uint8 | 18 | Giờ tắt |
 | `sched_m` | uint8 | 0 | Phút tắt |
 | `auth_p` | String | "123456" | Mật khẩu đăng nhập |
-| `tab_vis` | uint8 | 0x1F | Bitmask hiện tab (bit0=Đèn MEGA,1=Điều hòa,2=Đèn AMX,3=KIOS,4=Đèn M&A) |
+| `tab_vis` | uint8 | 0x1F | Bitmask hiện tab (bit0=Đèn M&A,1=Đèn MEGA,2=Đèn AMX,3=Điều hòa,4=KIOS) |
 
 ---
 
