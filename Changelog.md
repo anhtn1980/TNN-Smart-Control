@@ -41,6 +41,15 @@ Baseline ban đầu (chốt mốc trước khi cải tiến độ nhạy nút re
 
 ## Code_ESP32_Web_UI_TCP_client_.ino
 
+### [3.2.1] - 2026-06-29
+Đổi thứ tự hiển thị tab theo yêu cầu vận hành: tab dùng nhiều nhất lên đầu.
+
+- **Thứ tự mới**: 💡 Đèn M&A → 🔌 Đèn MEGA → 🧩 Đèn AMX → ❄️ Điều hòa LOGO! → 🖥️ KIOS → ⚙️ Cài đặt.
+- Cập nhật `navIcons[]`/`navNames[]`, thứ tự page HTML trong SPA, `tvNames[]` trong form Hiển thị tab.
+- Cập nhật `nav()` JS: KIOS load trigger chuyển sang `i===4`, pollCombo trigger chuyển sang `i===0`.
+- Cập nhật `masterPoll()` JS: mapping `cur` → hàm poll đúng theo thứ tự mới.
+- Bitmask `tab_vis` NVS đổi nghĩa: bit0=Đèn M&A, bit1=Đèn MEGA, bit2=Đèn AMX, bit3=Điều hòa, bit4=KIOS. Người dùng cần lưu lại "Hiển thị tab" sau khi nạp firmware nếu đã tùy chỉnh trước đó.
+
 ### [3.2.0] - 2026-06-27
 Đổi tên tab + thêm trang ghép "Đèn MEGA & AMX".
 
