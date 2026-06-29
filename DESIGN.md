@@ -4,7 +4,7 @@
 > trong các phiên làm việc tiếp theo. Cập nhật mỗi khi có thay đổi kiến trúc,
 > quyết định thiết kế quan trọng, hoặc lỗi đã sửa cần ghi nhớ lý do.
 >
-> Lần cập nhật gần nhất: v3.2.0 — 2026-06-27
+> Lần cập nhật gần nhất: v3.2.1 — 2026-06-29
 
 ---
 
@@ -43,7 +43,7 @@ mạng LAN nội bộ, không phụ thuộc WiFi, hỗ trợ cả PC và điện
 
 | Thiết bị | Vai trò | Firmware/IP |
 |---|---|---|
-| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.2.0 / 192.168.1.180 |
+| ESP32 + W5500 | Web server port 80, HTTP API, giao diện web | v3.2.1 / 192.168.1.180 |
 | MEGA2560 + W5500 | TCP server port 9000, điều khiển relay qua RS485 | v1.5.0 / 192.168.1.178 |
 | LOGO! 8 | Modbus TCP server port 504, điều khiển 4 điều hòa | — / 192.168.1.6 |
 | AMX CE-IO4 | 4 công tắc tường (digital input), TCP port 44197 | — / 192.168.1.7 |
@@ -90,7 +90,7 @@ kết nối nào để drop.
 
 | Route | Mô tả |
 |---|---|
-| `GET /` | **SPA duy nhất** — trả toàn bộ HTML gồm 4 trang con (Đèn / Điều hòa / AMX / KIOS). Chuyển tab bằng JS, không gửi HTTP request mới. |
+| `GET /` | **SPA duy nhất** — trả toàn bộ HTML gồm 6 trang con (Đèn M&A / Đèn MEGA / Đèn AMX / Điều hòa / KIOS / Cài đặt). Chuyển tab bằng JS, không gửi HTTP request mới. |
 
 Trước v2.6.0 có 5 route riêng: `GET /`, `/mega`, `/modbus`, `/amx`, `/kios` — đã gộp vào SPA để tránh socket W5500 cạn khi chuyển trang liên tục (đặc biệt trên kiosk).
 
@@ -110,26 +110,38 @@ Trước v2.6.0 có 5 route riêng: `GET /`, `/mega`, `/modbus`, `/amx`, `/kios`
 | `POST /login` | Kiểm tra password, set cookie `sid`, redirect `/` |
 | `GET /logout` | Xóa cookie, redirect `/login` |
 
-### 3.3 SPA Architecture (v2.6.0)
+### 3.3 SPA Architecture (v3.2.1)
 
 ```
-GET / → ESP32 trả một HTML duy nhất (~900 dòng)
-         ┌──────────────────────────────────────────────┐
-         │  Nav bar: [Đèn] [Điều hòa] [AMX] [KIOS]     │
-         │  <div id="p0" class="page active"> … </div>  │  ← Đèn (MEGA 16 relay)
-         │  <div id="p1" class="page">        … </div>  │  ← Điều hòa (LOGO! AC)
-         │  <div id="p2" class="page">        … </div>  │  ← AMX (CE-REL8 + CE-IO4)
-         │  <div id="p3" class="page">        … </div>  │  ← KIOS (iframe browser)
-         └──────────────────────────────────────────────┘
+GET / → ESP32 trả một HTML duy nhất (~1000 dòng)
+         ┌────────────────────────────────────────────────────────────────┐
+         │  Nav bar: [Đèn M&A] [Đèn MEGA] [Đèn AMX] [Điều hòa] [KIOS]  │
+         │  <div id="pc" class="page active"> … </div>  │  nav 0 — Đèn M&A (16 MEGA + 4 AMX ghép)
+         │  <div id="p0" class="page">        … </div>  │  nav 1 — Đèn MEGA (16 relay)
+         │  <div id="p2" class="page">        … </div>  │  nav 2 — Đèn AMX (CE-REL8 + CE-IO4)
+         │  <div id="p1" class="page">        … </div>  │  nav 3 — Điều hòa LOGO! (4 AC)
+         │  <div id="p3" class="page">        … </div>  │  nav 4 — KIOS (iframe browser)
+         │  <div id="p4" class="page">        … </div>  │  nav 5 — Cài đặt (luôn hiện)
+         └────────────────────────────────────────────────────────────────┘
+```
 
-showPage(n) → ẩn trang cũ, hiện trang n (chỉ thay CSS, không fetch HTTP)
+Lưu ý: `id` page (`pc`, `p0`, `p1`, `p2`, `p3`, `p4`) không thay đổi — JS `nav(n)` dùng vị trí DOM (`querySelectorAll('.page')[n]`), không dùng id. Thứ tự HTML output quyết định nav index.
+
+```
+nav(n) → ẩn trang cũ, hiện trang n (chỉ thay CSS, không fetch HTTP)
+       → n===0: pollCombo() ngay
+       → n===4: kLoad(0) nếu iframe chưa load
 
 masterPoll() mỗi 2s:
-  cur===0 → pollMega()     → GET /status
-  cur===1 → pollAC()       → GET /ac/status
+  cur===0 → pollCombo()    → GET /status → GET /amx/status (tuần tự)
+  cur===1 → pollMega()     → GET /status
   cur===2 → pollAMX()      → GET /amx/status
-  cur===3 → (không poll)   ← KIOS dùng iframe tự quản lý
+  cur===3 → pollAC()       → GET /ac/status
+  cur===4 → (không poll)   ← KIOS dùng iframe tự quản lý
+  cur===5 → syncInfo() mỗi 30s ← Cài đặt
 ```
+
+Tab visibility bitmask (`tab_vis` NVS, v3.2.1): bit0=Đèn M&A, bit1=Đèn MEGA, bit2=Đèn AMX, bit3=Điều hòa, bit4=KIOS. Tab Cài đặt không có trong bitmask — luôn hiện.
 
 **Lợi ích**: Không mở socket mới khi chuyển tab → giải quyết triệt để ERR_CONNECTION_REFUSED trên kiosk fullscreen.
 
@@ -352,7 +364,7 @@ Những thay đổi đã thử và gây ra vấn đề nghiêm trọng:
 ## 9. Cấu trúc file & version hiện tại
 
 ```
-Code_ESP32_Web_UI_TCP_client_.ino              v3.0.1   ESP32 Web server + SPA gateway
+Code_ESP32_Web_UI_TCP_client_.ino              v3.2.1   ESP32 Web server + SPA gateway
 Code_ArduinoMEGA2560_W5500_TCP_Max485_.ino     v1.5.0   MEGA RS485 controller
 DESIGN.md                                               Tài liệu kiến trúc (file này)
 Changelog.md                                            Lịch sử thay đổi tất cả firmware
@@ -397,6 +409,8 @@ HuongDanSuDung.doc                                      Hướng dẫn sử dụ
 - Reap socket CLOSE_WAIT chống cạn 8 socket W5500 (web chết, ping OK) — v3.0.7
 - Khối cài đặt ẩn (Hẹn giờ tắt + Hiển thị tab + Đổi mật khẩu) sau easter egg; ẩn/hiện tab nav lưu NVS — v3.0.8
 - Nút Đăng xuất trên nav bar — v3.0.0
+- Đổi tên tab + thêm trang ghép "Đèn M&A" (16 MEGA + 4 AMX, poll tuần tự) — v3.2.0
+- Đổi thứ tự tab: Đèn M&A lên đầu (nav 0), Điều hòa xuống thứ 4; bitmask tab_vis cập nhật — v3.2.1
 
 ### Còn hạn chế / chưa xác nhận 🔲
 - CE-IO4: `Subscribe` path không hoạt động (firmware CE-IO4 thực tế) → polling `get` mỗi 600ms (độ trễ tối đa 600ms)
